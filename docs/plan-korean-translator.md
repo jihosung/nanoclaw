@@ -1,4 +1,4 @@
-# Plan: Korean ↔ English Local LLM Translator
+# Plan: Korean ↔ English Translator via Gemini API
 
 Translate Korean user messages to English before NanoClaw processes them,
 then translate NanoClaw's English reply back to Korean before delivery.
@@ -7,41 +7,34 @@ then translate NanoClaw's English reply back to Korean before delivery.
 
 ```
 Discord (Korean)
-  → [translate KO→EN]  ← local LLM (Ollama in Docker)
+  → [translate KO→EN]  ← Gemini 2.5 Flash API
     → NanoClaw agent (English)
-      → [translate EN→KO]  ← local LLM (Ollama in Docker)
+      → [translate EN→KO]  ← Gemini 2.5 Flash API
         → Discord (Korean)
 ```
 
+No extra Docker container needed — translation calls go directly to the Gemini API
+from the NanoClaw process.
+
 ---
 
-## 1. Local LLM Service (Ollama)
+## 1. Gemini API Setup
 
-- Run **Ollama** as a persistent Docker container (separate from NanoClaw agent containers)
-- Expose HTTP API at `http://host.docker.internal:11434` (accessible from NanoClaw process and agent containers)
-- Recommended model: **EXAONE-3.5** or **Qwen2.5** — both strong at Korean↔English
-- Ollama persists models on a named Docker volume — survives restarts
-
-**Docker run:**
-```bash
-docker run -d --name ollama \
-  -p 11434:11434 \
-  -v ollama_data:/root/.ollama \
-  --restart unless-stopped \
-  ollama/ollama
-```
+- Model: **gemini-2.5-flash** — fast, cheap, excellent Korean↔English quality
+- API key from Google AI Studio (aistudio.google.com)
+- Add to `.env`: `GEMINI_API_KEY=...`
+- Use the `@google/generative-ai` npm package (or plain `fetch` to the REST API)
 
 ---
 
 ## 2. Translation Utility
 
 Add `src/translator.ts`:
-- `translateToEnglish(text: string): Promise<string>` — calls Ollama API
-- `translateToKorean(text: string): Promise<string>` — calls Ollama API
-- Language detection: skip translation if input is already English (heuristic: ASCII ratio or `franc` library)
-- Timeout + fallback: if Ollama is unavailable, pass through original text
-
-Ollama chat API endpoint: `POST http://localhost:11434/api/generate`
+- `translateToEnglish(text: string): Promise<string>` — calls Gemini API
+- `translateToKorean(text: string): Promise<string>` — calls Gemini API
+- Language detection: skip translation if input is already English (heuristic: Unicode Korean block ratio)
+- Timeout + fallback: if API call fails, pass through original text unchanged
+- System prompt: `"Translate the following text to [language]. Output only the translation, no explanations or labels."`
 
 ---
 
@@ -67,8 +60,8 @@ so no changes to the container image are needed.
 Add to `.env`:
 ```
 TRANSLATOR_ENABLED=true
-TRANSLATOR_URL=http://localhost:11434
-TRANSLATOR_MODEL=exaone3.5:latest
+GEMINI_API_KEY=your_key_here
+TRANSLATOR_MODEL=gemini-2.5-flash
 ```
 
 Per-group opt-in: add `"translatorEnabled": true` to the group's entry in the
@@ -80,21 +73,23 @@ registered groups config — so only specific channels use translation.
 
 | Decision | Options |
 |----------|---------|
-| Model | EXAONE-3.5 (Korean-specialized), Qwen2.5-7B (multilingual), Gemma3 |
-| Language detection | ASCII ratio heuristic, `franc` npm package, or ask LLM |
-| Translation scope | All channels, or per-channel opt-in |
+| Language detection | Korean Unicode block ratio (U+AC00–U+D7A3), or `franc` npm package |
+| Translation scope | All channels, or per-group opt-in |
 | Prompt format | System prompt instructing translate-only, no commentary |
-| Fallback | Pass-through on timeout, or error message to user |
+| Fallback | Pass-through on API error/timeout |
+| Code block handling | Skip translation inside ``` blocks to preserve code |
 
 ---
 
 ## 6. Implementation Steps
 
-1. Start Ollama container + pull translation model
-2. Create `src/translator.ts` with Ollama API client
-3. Add env config (`TRANSLATOR_ENABLED`, `TRANSLATOR_URL`, `TRANSLATOR_MODEL`)
-4. Hook `translateToEnglish` into incoming message pipeline in `src/index.ts`
-5. Hook `translateToKorean` into outgoing result callback in `src/index.ts`
-6. Add per-group `translatorEnabled` flag support
-7. Test end-to-end: Korean Discord message → English agent → Korean Discord reply
-8. Tune prompt to ensure translator outputs clean text only (no "Translation:" prefix etc.)
+1. Get Gemini API key from aistudio.google.com
+2. Add `GEMINI_API_KEY` and `TRANSLATOR_ENABLED` to `.env`
+3. Install `@google/generative-ai` npm package
+4. Create `src/translator.ts` with Gemini API client
+5. Hook `translateToEnglish` into incoming message pipeline in `src/index.ts`
+6. Hook `translateToKorean` into outgoing result callback in `src/index.ts`
+7. Add per-group `translatorEnabled` flag support
+8. Test end-to-end: Korean Discord message → English agent → Korean Discord reply
+9. Tune system prompt to ensure clean output (no "Translation:" prefix etc.)
+10. Handle edge cases: mixed Korean/English, code blocks, URLs
