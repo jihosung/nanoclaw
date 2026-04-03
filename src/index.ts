@@ -6,7 +6,7 @@ import { OneCLI } from '@onecli-sh/sdk';
 import {
   ASSISTANT_NAME,
   DEFAULT_TRIGGER,
-  GEMINI_API_KEY,
+  TRANSLATOR_URL,
   getTriggerPattern,
   GROUPS_DIR,
   IDLE_TIMEOUT,
@@ -71,6 +71,11 @@ import { logger } from './logger.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
+
+const LOG_PREVIEW_LEN = 120;
+function preview(text: string): string {
+  return text.length > LOG_PREVIEW_LEN ? text.slice(0, LOG_PREVIEW_LEN) + '…' : text;
+}
 
 let lastTimestamp = '';
 let sessions: Record<string, string> = {};
@@ -256,10 +261,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   let prompt = formatMessages(missedMessages, TIMEZONE);
 
-  if (TRANSLATOR_ENABLED && GEMINI_API_KEY) {
-    prompt = await translateToEnglish(prompt, GEMINI_API_KEY, TRANSLATOR_MODEL);
-  }
-
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
   const previousCursor = lastAgentTimestamp[chatJid] || '';
@@ -268,7 +269,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   saveState();
 
   logger.info(
-    { group: group.name, messageCount: missedMessages.length },
+    { group: group.name, messageCount: missedMessages.length, input: preview(prompt) },
     'Processing messages',
   );
 
@@ -299,12 +300,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           : JSON.stringify(result.result);
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
+      logger.info({ group: group.name, output: preview(text) }, `Agent output: ${raw.length} chars`);
       if (text) {
         await channel.setTyping?.(chatJid, false);
         const outText =
-          TRANSLATOR_ENABLED && GEMINI_API_KEY
-            ? await translateToKorean(text, GEMINI_API_KEY, TRANSLATOR_MODEL)
+          TRANSLATOR_ENABLED && TRANSLATOR_URL
+            ? await translateToKorean(text, TRANSLATOR_URL, TRANSLATOR_MODEL)
             : text;
         await channel.sendMessage(chatJid, outText);
         outputSentToUser = true;
@@ -528,7 +529,7 @@ async function startMessageLoop(): Promise<void> {
 
           if (queue.sendMessage(chatJid, formatted)) {
             logger.debug(
-              { chatJid, count: messagesToSend.length },
+              { chatJid, count: messagesToSend.length, input: preview(formatted) },
               'Piped messages to active container',
             );
             lastAgentTimestamp[chatJid] =
@@ -648,7 +649,7 @@ async function main(): Promise<void> {
 
   // Channel callbacks (shared by all channels)
   const channelOpts = {
-    onMessage: (chatJid: string, msg: NewMessage) => {
+    onMessage: async (chatJid: string, msg: NewMessage) => {
       // Remote control commands — intercept before storage
       const trimmed = msg.content.trim();
       if (trimmed === '/remote-control' || trimmed === '/remote-control-end') {
@@ -674,6 +675,16 @@ async function main(): Promise<void> {
           return;
         }
       }
+
+      // Translate incoming message to English before storing so all downstream
+      // data (DB, session history, memory files) stays in English.
+      if (TRANSLATOR_ENABLED && TRANSLATOR_URL && !msg.is_from_me && !msg.is_bot_message) {
+        msg = { ...msg, content: await translateToEnglish(msg.content, TRANSLATOR_URL, TRANSLATOR_MODEL) };
+        if (msg.reply_to_message_content) {
+          msg = { ...msg, reply_to_message_content: await translateToEnglish(msg.reply_to_message_content, TRANSLATOR_URL, TRANSLATOR_MODEL) };
+        }
+      }
+
       storeMessage(msg);
     },
     onChatMetadata: (

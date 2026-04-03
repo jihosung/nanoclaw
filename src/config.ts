@@ -10,9 +10,10 @@ const envConfig = readEnvFile([
   'ASSISTANT_HAS_OWN_NUMBER',
   'ONECLI_URL',
   'TZ',
-  'GEMINI_API_KEY',
   'TRANSLATOR_ENABLED',
+  'TRANSLATOR_URL',
   'TRANSLATOR_MODEL',
+  'AGENT_MODEL',
 ]);
 
 export const ASSISTANT_NAME =
@@ -58,10 +59,14 @@ export const ONECLI_URL =
   process.env.ONECLI_URL || envConfig.ONECLI_URL || 'http://localhost:10254';
 export const TRANSLATOR_ENABLED =
   (process.env.TRANSLATOR_ENABLED || envConfig.TRANSLATOR_ENABLED) === 'true';
-export const GEMINI_API_KEY =
-  process.env.GEMINI_API_KEY || envConfig.GEMINI_API_KEY || '';
+export const TRANSLATOR_URL =
+  process.env.TRANSLATOR_URL || envConfig.TRANSLATOR_URL || 'http://localhost:11434';
 export const TRANSLATOR_MODEL =
-  process.env.TRANSLATOR_MODEL || envConfig.TRANSLATOR_MODEL || 'gemini-2.5-flash';
+  process.env.TRANSLATOR_MODEL ||
+  envConfig.TRANSLATOR_MODEL ||
+  'translategemma:4b';
+export const AGENT_MODEL =
+  process.env.AGENT_MODEL || envConfig.AGENT_MODEL || '';
 export const MAX_MESSAGES_PER_PROMPT = Math.max(
   1,
   parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10,

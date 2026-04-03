@@ -155,7 +155,7 @@ export class DiscordChannel implements Channel {
       }
 
       // Deliver message — startMessageLoop() will pick it up
-      this.opts.onMessage(chatJid, {
+      await this.opts.onMessage(chatJid, {
         id: msgId,
         chat_jid: chatJid,
         sender,
@@ -276,7 +276,10 @@ export class DiscordChannel implements Channel {
     };
 
     // Sentinel to handle setTyping(false) arriving before the first await resolves
-    this.typingIntervals.set(jid, null as unknown as ReturnType<typeof setInterval>);
+    this.typingIntervals.set(
+      jid,
+      null as unknown as ReturnType<typeof setInterval>,
+    );
 
     await sendTyping();
 
