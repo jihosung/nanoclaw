@@ -6,6 +6,7 @@ import { OneCLI } from '@onecli-sh/sdk';
 import {
   ASSISTANT_NAME,
   DEFAULT_TRIGGER,
+  GEMINI_API_KEY,
   getTriggerPattern,
   GROUPS_DIR,
   IDLE_TIMEOUT,
@@ -13,7 +14,10 @@ import {
   ONECLI_URL,
   POLL_INTERVAL,
   TIMEZONE,
+  TRANSLATOR_ENABLED,
+  TRANSLATOR_MODEL,
 } from './config.js';
+import { translateToEnglish, translateToKorean } from './translator.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -250,7 +254,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
-  const prompt = formatMessages(missedMessages, TIMEZONE);
+  let prompt = formatMessages(missedMessages, TIMEZONE);
+
+  if (TRANSLATOR_ENABLED && GEMINI_API_KEY) {
+    prompt = await translateToEnglish(prompt, GEMINI_API_KEY, TRANSLATOR_MODEL);
+  }
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -294,7 +302,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
       if (text) {
         await channel.setTyping?.(chatJid, false);
-        await channel.sendMessage(chatJid, text);
+        const outText =
+          TRANSLATOR_ENABLED && GEMINI_API_KEY
+            ? await translateToKorean(text, GEMINI_API_KEY, TRANSLATOR_MODEL)
+            : text;
+        await channel.sendMessage(chatJid, outText);
         outputSentToUser = true;
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
