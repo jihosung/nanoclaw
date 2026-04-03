@@ -60,7 +60,9 @@ export const ONECLI_URL =
 export const TRANSLATOR_ENABLED =
   (process.env.TRANSLATOR_ENABLED || envConfig.TRANSLATOR_ENABLED) === 'true';
 export const TRANSLATOR_URL =
-  process.env.TRANSLATOR_URL || envConfig.TRANSLATOR_URL || 'http://localhost:11434';
+  process.env.TRANSLATOR_URL ||
+  envConfig.TRANSLATOR_URL ||
+  'http://localhost:11434';
 export const TRANSLATOR_MODEL =
   process.env.TRANSLATOR_MODEL ||
   envConfig.TRANSLATOR_MODEL ||

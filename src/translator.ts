@@ -76,7 +76,10 @@ export async function translateToEnglish(
   model: string,
 ): Promise<string> {
   if (!containsKorean(text)) {
-    logger.info({ preview: preview(text) }, '[translator] KO→EN skipped (no Korean detected)');
+    logger.info(
+      { preview: preview(text) },
+      '[translator] KO→EN skipped (no Korean detected)',
+    );
     return text;
   }
 
@@ -87,10 +90,16 @@ export async function translateToEnglish(
     const prompt = `Translate the following text to English. Output only the translation, no explanations or labels.\n\n${stripped}`;
     const translated = await callOllama(translatorUrl, model, prompt);
     const result = restoreCodeBlocks(translated, blocks);
-    logger.info({ input: preview(stripped), output: preview(result) }, '[translator] KO→EN done');
+    logger.info(
+      { input: preview(stripped), output: preview(result) },
+      '[translator] KO→EN done',
+    );
     return result;
   } catch (err) {
-    logger.warn({ err, input: preview(stripped) }, '[translator] KO→EN failed, using original text');
+    logger.warn(
+      { err, input: preview(stripped) },
+      '[translator] KO→EN failed, using original text',
+    );
     return text;
   }
 }
@@ -107,10 +116,16 @@ export async function translateToKorean(
     const prompt = `Translate the following text to Korean. Output only the translation, no explanations or labels.\n\n${stripped}`;
     const translated = await callOllama(translatorUrl, model, prompt);
     const result = restoreCodeBlocks(translated, blocks);
-    logger.info({ input: preview(stripped), output: preview(result) }, '[translator] EN→KO done');
+    logger.info(
+      { input: preview(stripped), output: preview(result) },
+      '[translator] EN→KO done',
+    );
     return result;
   } catch (err) {
-    logger.warn({ err, input: preview(stripped) }, '[translator] EN→KO failed, using original text');
+    logger.warn(
+      { err, input: preview(stripped) },
+      '[translator] EN→KO failed, using original text',
+    );
     return text;
   }
 }

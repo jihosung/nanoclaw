@@ -74,7 +74,9 @@ export { escapeXml, formatMessages } from './router.js';
 
 const LOG_PREVIEW_LEN = 120;
 function preview(text: string): string {
-  return text.length > LOG_PREVIEW_LEN ? text.slice(0, LOG_PREVIEW_LEN) + '…' : text;
+  return text.length > LOG_PREVIEW_LEN
+    ? text.slice(0, LOG_PREVIEW_LEN) + '…'
+    : text;
 }
 
 let lastTimestamp = '';
@@ -269,7 +271,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   saveState();
 
   logger.info(
-    { group: group.name, messageCount: missedMessages.length, input: preview(prompt) },
+    {
+      group: group.name,
+      messageCount: missedMessages.length,
+      input: preview(prompt),
+    },
     'Processing messages',
   );
 
@@ -300,7 +306,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           : JSON.stringify(result.result);
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name, output: preview(text) }, `Agent output: ${raw.length} chars`);
+      logger.info(
+        { group: group.name, output: preview(text) },
+        `Agent output: ${raw.length} chars`,
+      );
       if (text) {
         await channel.setTyping?.(chatJid, false);
         const outText =
@@ -529,7 +538,11 @@ async function startMessageLoop(): Promise<void> {
 
           if (queue.sendMessage(chatJid, formatted)) {
             logger.debug(
-              { chatJid, count: messagesToSend.length, input: preview(formatted) },
+              {
+                chatJid,
+                count: messagesToSend.length,
+                input: preview(formatted),
+              },
               'Piped messages to active container',
             );
             lastAgentTimestamp[chatJid] =
@@ -678,10 +691,29 @@ async function main(): Promise<void> {
 
       // Translate incoming message to English before storing so all downstream
       // data (DB, session history, memory files) stays in English.
-      if (TRANSLATOR_ENABLED && TRANSLATOR_URL && !msg.is_from_me && !msg.is_bot_message) {
-        msg = { ...msg, content: await translateToEnglish(msg.content, TRANSLATOR_URL, TRANSLATOR_MODEL) };
+      if (
+        TRANSLATOR_ENABLED &&
+        TRANSLATOR_URL &&
+        !msg.is_from_me &&
+        !msg.is_bot_message
+      ) {
+        msg = {
+          ...msg,
+          content: await translateToEnglish(
+            msg.content,
+            TRANSLATOR_URL,
+            TRANSLATOR_MODEL,
+          ),
+        };
         if (msg.reply_to_message_content) {
-          msg = { ...msg, reply_to_message_content: await translateToEnglish(msg.reply_to_message_content, TRANSLATOR_URL, TRANSLATOR_MODEL) };
+          msg = {
+            ...msg,
+            reply_to_message_content: await translateToEnglish(
+              msg.reply_to_message_content,
+              TRANSLATOR_URL,
+              TRANSLATOR_MODEL,
+            ),
+          };
         }
       }
 
