@@ -21,17 +21,30 @@ function containsKorean(text: string): boolean {
   return false;
 }
 
-function stripCodeBlocks(text: string): { stripped: string; blocks: string[] } {
+function stripUntranslatable(text: string): { stripped: string; blocks: string[] } {
   const blocks: string[] = [];
-  const stripped = text.replace(/```[\s\S]*?```/g, (match) => {
-    blocks.push(match);
-    return `\x00CODEBLOCK${blocks.length - 1}\x00`;
-  });
+  const placeholder = (i: number) => `\x00BLOCK${i}\x00`;
+
+  // Order matters: code blocks first (may contain URLs), then attachment links, then bare URLs
+  const stripped = text
+    .replace(/```[\s\S]*?```/g, (match) => {
+      blocks.push(match);
+      return placeholder(blocks.length - 1);
+    })
+    .replace(/\[(?:Image|Video|Audio|File):[^\]]*\]\([^)]+\)/g, (match) => {
+      blocks.push(match);
+      return placeholder(blocks.length - 1);
+    })
+    .replace(/https?:\/\/\S+/g, (match) => {
+      blocks.push(match);
+      return placeholder(blocks.length - 1);
+    });
+
   return { stripped, blocks };
 }
 
-function restoreCodeBlocks(text: string, blocks: string[]): string {
-  return text.replace(/\x00CODEBLOCK(\d+)\x00/g, (_, i) => blocks[parseInt(i)]);
+function restoreUntranslatable(text: string, blocks: string[]): string {
+  return text.replace(/\x00BLOCK(\d+)\x00/g, (_, i) => blocks[parseInt(i)]);
 }
 
 async function callOllama(
@@ -83,13 +96,13 @@ export async function translateToEnglish(
     return text;
   }
 
-  const { stripped, blocks } = stripCodeBlocks(text);
+  const { stripped, blocks } = stripUntranslatable(text);
 
   try {
     logger.info({ input: preview(stripped) }, '[translator] KO→EN start');
     const prompt = `Translate the following text to English. Output only the translation, no explanations or labels.\n\n${stripped}`;
     const translated = await callOllama(translatorUrl, model, prompt);
-    const result = restoreCodeBlocks(translated, blocks);
+    const result = restoreUntranslatable(translated, blocks);
     logger.info(
       { input: preview(stripped), output: preview(result) },
       '[translator] KO→EN done',
@@ -109,13 +122,13 @@ export async function translateToKorean(
   translatorUrl: string,
   model: string,
 ): Promise<string> {
-  const { stripped, blocks } = stripCodeBlocks(text);
+  const { stripped, blocks } = stripUntranslatable(text);
 
   try {
     logger.info({ input: preview(stripped) }, '[translator] EN→KO start');
     const prompt = `Translate the following text to Korean. Output only the translation, no explanations or labels.\n\n${stripped}`;
     const translated = await callOllama(translatorUrl, model, prompt);
-    const result = restoreCodeBlocks(translated, blocks);
+    const result = restoreUntranslatable(translated, blocks);
     logger.info(
       { input: preview(stripped), output: preview(result) },
       '[translator] EN→KO done',
