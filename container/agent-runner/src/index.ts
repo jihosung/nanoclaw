@@ -16,13 +16,17 @@
 
 import fs from 'fs';
 import path from 'path';
-import { execFile, execSync } from 'child_process';
+import { execFile } from 'child_process';
 import {
   query,
   HookCallback,
   PreCompactHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import {
+  CodexAppServerClient,
+  type AppServerInputItem,
+} from './codex-app-server-client.js';
 
 interface ContainerInput {
   prompt: string;
@@ -601,147 +605,161 @@ async function runScript(script: string): Promise<ScriptResult | null> {
 }
 
 // ---------------------------------------------------------------------------
-// Codex brain — @openai/codex CLI subprocess with OAuth credentials
+// Codex brain — @openai/codex app-server (JSON-RPC, long-lived process)
+// Architecture ported from EJClaw (phj1081/EJClaw)
 // ---------------------------------------------------------------------------
 
-interface CodexSession {
-  /** Conversation turns for context injection on follow-up messages */
-  turns: Array<{ user: string; assistant: string }>;
-}
+const CODEX_GROUP_DIR = '/workspace/group';
+const CODEX_MODEL = process.env.OPENAI_MODEL || '';
+const CODEX_EFFORT = process.env.CODEX_EFFORT || '';
 
-const CODEX_SESSIONS_DIR = '/home/node/.codex/nanoclaw-sessions';
-const CODEX_CLI_TIMEOUT_MS = 300_000; // 5 min — codex tasks can be slow
+/**
+ * Run a single app-server turn, with IPC polling for steering/interruption.
+ * Progress notifications are emitted as intermediate writeOutput calls.
+ */
+async function executeAppServerTurn(
+  client: CodexAppServerClient,
+  threadId: string,
+  prompt: string,
+  retryCount = 0,
+): Promise<{ result: string | null; error?: string; closed: boolean }> {
+  let lastProgressMessage: string | null = null;
+  let closed = false;
 
-function loadCodexSession(sessionId: string): CodexSession {
-  const filePath = path.join(CODEX_SESSIONS_DIR, `${sessionId}.json`);
-  if (fs.existsSync(filePath)) {
-    try {
-      return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as CodexSession;
-    } catch {
-      /* corrupted — start fresh */
+  const activeTurn = await client.startTurn(
+    threadId,
+    [{ type: 'text', text: prompt }] satisfies AppServerInputItem[],
+    {
+      cwd: CODEX_GROUP_DIR,
+      model: CODEX_MODEL || undefined,
+      effort: CODEX_EFFORT || undefined,
+      onProgress: (message) => {
+        const trimmed = message.trim();
+        if (!trimmed || trimmed === lastProgressMessage) return;
+        lastProgressMessage = trimmed;
+        writeOutput({ status: 'success', result: trimmed, newSessionId: threadId });
+      },
+    },
+  );
+
+  let polling = true;
+  const pollDuringTurn = async () => {
+    if (!polling) return;
+
+    if (shouldClose()) {
+      log('Close sentinel during Codex turn — interrupting');
+      polling = false;
+      closed = true;
+      try { await activeTurn.interrupt(); } catch { /* ignore */ }
+      return;
     }
+
+    const messages = drainIpcInput();
+    if (messages.length > 0) {
+      const merged = messages.join('\n');
+      log(`Steering Codex turn with ${messages.length} IPC message(s)`);
+      try {
+        await activeTurn.steer([{ type: 'text', text: merged }]);
+      } catch (err) {
+        log(`turn/steer failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    setTimeout(() => void pollDuringTurn(), IPC_POLL_MS);
+  };
+  setTimeout(() => void pollDuringTurn(), IPC_POLL_MS);
+
+  try {
+    const { state, result } = await activeTurn.wait();
+
+    if (state.status === 'completed') {
+      return { result, closed };
+    }
+    if (state.status === 'interrupted' && closed) {
+      return { result, closed };
+    }
+    if (state.status === 'interrupted' && retryCount < 1) {
+      log('Codex turn interrupted unexpectedly — retrying once');
+      return executeAppServerTurn(client, threadId, prompt, retryCount + 1);
+    }
+    return {
+      result,
+      error: state.errorMessage || `Codex turn finished with status ${state.status}`,
+      closed,
+    };
+  } finally {
+    polling = false;
   }
-  return { turns: [] };
-}
-
-function saveCodexSession(sessionId: string, session: CodexSession): void {
-  fs.mkdirSync(CODEX_SESSIONS_DIR, { recursive: true });
-  const filePath = path.join(CODEX_SESSIONS_DIR, `${sessionId}.json`);
-  fs.writeFileSync(filePath, JSON.stringify(session, null, 2));
-}
-
-function generateCodexSessionId(): string {
-  return `codex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-/**
- * Build a prompt with conversation history prepended so Codex has context.
- * Codex CLI has no --resume flag, so history is injected as plain text.
- */
-function buildCodexPrompt(userMessage: string, session: CodexSession): string {
-  if (session.turns.length === 0) return userMessage;
-  const history = session.turns
-    .map((t) => `User: ${t.user}\nAssistant: ${t.assistant}`)
-    .join('\n\n');
-  return `[Previous conversation]\n${history}\n\n[Current message]\n${userMessage}`;
-}
-
-/** Strip ANSI escape codes from terminal output */
-function stripAnsi(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1B\][^\x07]*\x07/g, '');
-}
-
-/**
- * Run the @openai/codex CLI for a single turn and return the output text.
- * Credentials come from ~/.codex/ (written by `codex auth`).
- */
-function runCodexCli(prompt: string): Promise<string> {
-  const { spawn } = require('child_process') as typeof import('child_process');
-  const model = process.env.OPENAI_MODEL || 'o4-mini';
-
-  return new Promise((resolve, reject) => {
-    const args = [
-      '--model', model,
-      '--approval-mode', 'full-auto',
-      '--quiet',
-      prompt,
-    ];
-
-    log(`Codex CLI: codex ${args.slice(0, -1).join(' ')} "<prompt>"`);
-
-    const proc = spawn('codex', args, {
-      cwd: '/workspace/group',
-      env: { ...process.env, CI: '1' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    let stdout = '';
-    let stderr = '';
-    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
-
-    const timer = setTimeout(() => {
-      proc.kill('SIGTERM');
-      reject(new Error(`Codex CLI timed out after ${CODEX_CLI_TIMEOUT_MS / 1000}s`));
-    }, CODEX_CLI_TIMEOUT_MS);
-
-    proc.on('close', (code) => {
-      clearTimeout(timer);
-      if (code !== 0 && code !== null) {
-        reject(new Error(`codex exited ${code}: ${stderr.slice(0, 500)}`));
-        return;
-      }
-      resolve(stripAnsi(stdout).trim() || stripAnsi(stderr).trim());
-    });
-
-    proc.on('error', (err) => {
-      clearTimeout(timer);
-      // Provide a clear message if codex is not installed
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        reject(new Error('codex CLI not found — rebuild the container after adding @openai/codex'));
-      } else {
-        reject(err);
-      }
-    });
-  });
 }
 
 async function runCodexBrain(containerInput: ContainerInput): Promise<void> {
-  const sessionId = containerInput.sessionId || generateCodexSessionId();
-  log(`Codex brain starting (session: ${sessionId})`);
+  log(`Codex brain starting (app-server, session: ${containerInput.sessionId || 'new'})`);
 
-  let userMessage = containerInput.prompt;
+  let prompt = containerInput.prompt;
   if (containerInput.isScheduledTask) {
-    userMessage = `[SCHEDULED TASK]\n\n${userMessage}`;
+    prompt = `[SCHEDULED TASK]\n\n${prompt}`;
   }
   const pending = drainIpcInput();
-  if (pending.length > 0) userMessage += '\n' + pending.join('\n');
+  if (pending.length > 0) prompt += '\n' + pending.join('\n');
 
-  const session = loadCodexSession(sessionId);
+  const client = new CodexAppServerClient({ cwd: CODEX_GROUP_DIR, log });
+  await client.start();
 
+  let threadId: string;
   try {
+    try {
+      threadId = await client.startOrResumeThread(containerInput.sessionId, {
+        cwd: CODEX_GROUP_DIR,
+        model: CODEX_MODEL || undefined,
+      });
+      log(containerInput.sessionId
+        ? `App-server thread resumed (${threadId})`
+        : `App-server thread started (${threadId})`);
+    } catch (err) {
+      if (!containerInput.sessionId) throw err;
+      log(`Resume failed, starting fresh: ${err instanceof Error ? err.message : String(err)}`);
+      threadId = await client.startOrResumeThread(undefined, {
+        cwd: CODEX_GROUP_DIR,
+        model: CODEX_MODEL || undefined,
+      });
+      log(`App-server thread restarted (${threadId})`);
+    }
+
     while (true) {
-      const fullPrompt = buildCodexPrompt(userMessage, session);
-      const result = await runCodexCli(fullPrompt);
+      log(`Starting Codex turn (thread: ${threadId})...`);
+      const { result, error, closed } = await executeAppServerTurn(client, threadId, prompt);
 
-      session.turns.push({ user: userMessage, assistant: result });
-      saveCodexSession(sessionId, session);
+      if (error) {
+        log(`Codex turn error: ${error}`);
+        writeOutput({ status: 'error', result: result || null, newSessionId: threadId, error });
+      } else {
+        writeOutput({ status: 'success', result: result || null, newSessionId: threadId });
+      }
 
-      writeOutput({ status: 'success', result: result || null, newSessionId: sessionId });
+      if (closed) {
+        log('Codex brain: close sentinel consumed during turn, exiting');
+        break;
+      }
+
+      // Emit session update for host tracking, then wait for next IPC message
+      writeOutput({ status: 'success', result: null, newSessionId: threadId });
+      log('Codex turn done, waiting for next IPC message...');
 
       const nextMessage = await waitForIpcMessage();
       if (nextMessage === null) {
         log('Codex brain: close sentinel received, exiting');
         break;
       }
-      userMessage = nextMessage;
+      log(`Got new message (${nextMessage.length} chars)`);
+      prompt = nextMessage;
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     log(`Codex brain error: ${errorMessage}`);
     writeOutput({ status: 'error', result: null, error: errorMessage });
     process.exit(1);
+  } finally {
+    await client.close();
   }
 }
 
