@@ -15,6 +15,7 @@ import {
   GROUPS_DIR,
   IDLE_TIMEOUT,
   ONECLI_URL,
+  OPENAI_API_KEY,
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
@@ -137,16 +138,43 @@ function buildVolumeMounts(
       }
     }
     const env = (settings.env as Record<string, string> | undefined) ?? {};
-    // Always-on Claude Code flags
-    env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1';
-    env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = '1';
-    env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '0';
-    // Model selection — set ANTHROPIC_MODEL when AGENT_MODEL is configured
-    if (AGENT_MODEL) {
-      env.ANTHROPIC_MODEL = AGENT_MODEL;
-    } else {
+    const profile = group.agentProfile;
+    const brain = profile?.brain ?? 'claude';
+
+    // Always inject the brain type so the agent-runner can dispatch
+    env.BRAIN_TYPE = brain;
+
+    if (brain === 'claude') {
+      // Claude Code runtime flags
+      env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1';
+      env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = '1';
+      env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '0';
+      // Model — per-group override takes priority over global AGENT_MODEL
+      const model = profile?.model || AGENT_MODEL;
+      if (model) {
+        env.ANTHROPIC_MODEL = model;
+      } else {
+        delete env.ANTHROPIC_MODEL;
+      }
+      delete env.OPENAI_API_KEY;
+      delete env.OPENAI_MODEL;
+    } else if (brain === 'codex') {
+      // Codex brain — OpenAI API
+      const model = profile?.model || 'gpt-4o';
+      env.OPENAI_MODEL = model;
+      if (OPENAI_API_KEY) env.OPENAI_API_KEY = OPENAI_API_KEY;
+      // Remove Claude-specific vars that shouldn't bleed into Codex containers
       delete env.ANTHROPIC_MODEL;
+      delete env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
+      delete env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD;
+      delete env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
     }
+
+    // Merge any extra env vars from the profile (last — intentionally overridable)
+    if (profile?.env) {
+      Object.assign(env, profile.env);
+    }
+
     settings.env = env;
     fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
   }

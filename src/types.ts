@@ -32,6 +32,24 @@ export interface ContainerConfig {
   timeout?: number; // Default: 300000 (5 minutes)
 }
 
+/**
+ * Which agent brain to use for a group.
+ * - 'claude': Claude Code via Anthropic SDK (default)
+ * - 'codex':  OpenAI-based coding agent via OpenAI API
+ */
+export type BrainType = 'claude' | 'codex';
+
+/**
+ * Per-group agent profile. Absent means default Claude behavior.
+ * Extra env vars are merged into the group's settings.json at container
+ * startup, so they are available inside the running agent.
+ */
+export interface AgentProfile {
+  brain: BrainType;
+  model?: string;                    // Override global AGENT_MODEL / default model
+  env?: Record<string, string>;      // Extra env vars injected into the container
+}
+
 export interface RegisteredGroup {
   name: string;
   folder: string;
@@ -40,6 +58,7 @@ export interface RegisteredGroup {
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
+  agentProfile?: AgentProfile; // Optional brain override; absent = default Claude
 }
 
 export interface NewMessage {

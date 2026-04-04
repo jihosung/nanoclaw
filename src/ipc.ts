@@ -173,6 +173,7 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    agentProfile?: RegisteredGroup['agentProfile'];
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -444,6 +445,15 @@ export async function processTaskIpc(
         // Defense in depth: agent cannot set isMain via IPC.
         // Preserve isMain from the existing registration so IPC config
         // updates (e.g. adding additionalMounts) don't strip the flag.
+        // Validate agentProfile.brain if provided
+        const profile = data.agentProfile;
+        if (profile && profile.brain !== 'claude' && profile.brain !== 'codex') {
+          logger.warn(
+            { sourceGroup, brain: profile.brain },
+            'Invalid register_group request - unknown brain type',
+          );
+          break;
+        }
         const existingGroup = registeredGroups[data.jid];
         deps.registerGroup(data.jid, {
           name: data.name,
@@ -452,6 +462,7 @@ export async function processTaskIpc(
           added_at: new Date().toISOString(),
           containerConfig: data.containerConfig,
           requiresTrigger: data.requiresTrigger,
+          agentProfile: profile,
           isMain: existingGroup?.isMain,
         });
       } else {

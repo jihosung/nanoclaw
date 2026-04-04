@@ -16,7 +16,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { execFile } from 'child_process';
+import { execFile, execSync } from 'child_process';
 import {
   query,
   HookCallback,
@@ -600,6 +600,220 @@ async function runScript(script: string): Promise<ScriptResult | null> {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Codex brain — OpenAI API-based agent with bash + file tools
+// ---------------------------------------------------------------------------
+
+interface OpenAIMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;
+  tool_call_id?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: { name: string; arguments: string };
+  }>;
+}
+
+interface CodexSession {
+  messages: OpenAIMessage[];
+}
+
+const CODEX_SESSIONS_DIR = '/home/node/.claude/codex-sessions';
+const CODEX_TOOLS = [
+  {
+    type: 'function' as const,
+    function: {
+      name: 'bash',
+      description: 'Run a shell command in the group workspace (/workspace/group). Returns stdout+stderr.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Shell command to execute' },
+        },
+        required: ['command'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'read_file',
+      description: 'Read a file from /workspace/group. Path must be relative.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Relative file path' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'write_file',
+      description: 'Write content to a file in /workspace/group. Creates parent dirs if needed.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Relative file path' },
+          content: { type: 'string', description: 'File content' },
+        },
+        required: ['path', 'content'],
+      },
+    },
+  },
+];
+
+function loadCodexSession(sessionId: string): CodexSession {
+  const filePath = path.join(CODEX_SESSIONS_DIR, `${sessionId}.json`);
+  if (fs.existsSync(filePath)) {
+    try {
+      return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as CodexSession;
+    } catch {
+      /* corrupted — start fresh */
+    }
+  }
+  return { messages: [] };
+}
+
+function saveCodexSession(sessionId: string, session: CodexSession): void {
+  fs.mkdirSync(CODEX_SESSIONS_DIR, { recursive: true });
+  const filePath = path.join(CODEX_SESSIONS_DIR, `${sessionId}.json`);
+  fs.writeFileSync(filePath, JSON.stringify(session, null, 2));
+}
+
+function generateSessionId(): string {
+  return `codex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function runCodexTool(name: string, args: Record<string, string>): string {
+  try {
+    if (name === 'bash') {
+      const out = execSync(args.command, {
+        cwd: '/workspace/group',
+        encoding: 'utf-8',
+        timeout: 30_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return out || '(no output)';
+    }
+    if (name === 'read_file') {
+      const resolved = path.join('/workspace/group', args.path);
+      return fs.readFileSync(resolved, 'utf-8');
+    }
+    if (name === 'write_file') {
+      const resolved = path.join('/workspace/group', args.path);
+      fs.mkdirSync(path.dirname(resolved), { recursive: true });
+      fs.writeFileSync(resolved, args.content);
+      return `Written: ${args.path}`;
+    }
+    return `Unknown tool: ${name}`;
+  } catch (err) {
+    return `Error: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function runCodexQuery(
+  prompt: string,
+  sessionId: string,
+  containerInput: ContainerInput,
+): Promise<{ text: string; newSessionId: string }> {
+  // Lazy import — only loaded when brain=codex
+  const { default: OpenAI } = await import('openai');
+  const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY || '',
+    baseURL: process.env.OPENAI_BASE_URL,
+  });
+  const model = process.env.OPENAI_MODEL || 'gpt-4o';
+
+  // Load or init session
+  const session = loadCodexSession(sessionId);
+
+  // System prompt from CLAUDE.md if present
+  if (session.messages.length === 0) {
+    const claudeMdPath = '/workspace/group/CLAUDE.md';
+    const systemContent = fs.existsSync(claudeMdPath)
+      ? fs.readFileSync(claudeMdPath, 'utf-8')
+      : 'You are a helpful coding assistant with access to bash and file tools in /workspace/group.';
+    session.messages.push({ role: 'system', content: systemContent });
+  }
+
+  session.messages.push({ role: 'user', content: prompt });
+
+  // Agentic loop — continue until no more tool calls
+  let finalText = '';
+  const MAX_ROUNDS = 20;
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const response = await openai.chat.completions.create({
+      model,
+      messages: session.messages as any,
+      tools: CODEX_TOOLS,
+      tool_choice: 'auto',
+    });
+
+    const choice = response.choices[0];
+    const msg = choice.message;
+    session.messages.push(msg as OpenAIMessage);
+
+    if (choice.finish_reason === 'tool_calls' && msg.tool_calls?.length) {
+      for (const tc of msg.tool_calls) {
+        let toolArgs: Record<string, string> = {};
+        try { toolArgs = JSON.parse(tc.function.arguments); } catch { /* ignore */ }
+        log(`Codex tool call: ${tc.function.name}(${tc.function.arguments.slice(0, 120)})`);
+        const result = runCodexTool(tc.function.name, toolArgs);
+        session.messages.push({
+          role: 'tool',
+          tool_call_id: tc.id,
+          content: result.slice(0, 8000), // cap tool output
+        });
+      }
+      continue;
+    }
+
+    finalText = (msg.content ?? '').trim();
+    break;
+  }
+
+  saveCodexSession(sessionId, session);
+  return { text: finalText, newSessionId: sessionId };
+}
+
+async function runCodexBrain(containerInput: ContainerInput): Promise<void> {
+  const sessionId = containerInput.sessionId || generateSessionId();
+  log(`Codex brain starting (session: ${sessionId})`);
+
+  let prompt = containerInput.prompt;
+  if (containerInput.isScheduledTask) {
+    prompt = `[SCHEDULED TASK]\n\n${prompt}`;
+  }
+  const pending = drainIpcInput();
+  if (pending.length > 0) prompt += '\n' + pending.join('\n');
+
+  try {
+    while (true) {
+      const { text, newSessionId } = await runCodexQuery(prompt, sessionId, containerInput);
+      writeOutput({ status: 'success', result: text || null, newSessionId });
+
+      const nextMessage = await waitForIpcMessage();
+      if (nextMessage === null) {
+        log('Codex brain: close sentinel received, exiting');
+        break;
+      }
+      prompt = nextMessage;
+    }
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    log(`Codex brain error: ${errorMessage}`);
+    writeOutput({ status: 'error', result: null, error: errorMessage });
+    process.exit(1);
+  }
+}
+
+// ---------------------------------------------------------------------------
+
 async function main(): Promise<void> {
   let containerInput: ContainerInput;
 
@@ -620,6 +834,14 @@ async function main(): Promise<void> {
     });
     process.exit(1);
   }
+
+  // Brain dispatcher — route to the appropriate agent based on BRAIN_TYPE env var
+  const brainType = (process.env.BRAIN_TYPE || 'claude').toLowerCase();
+  if (brainType === 'codex') {
+    await runCodexBrain(containerInput);
+    return;
+  }
+  // Default: Claude Code path continues below
 
   // Credentials are injected by the host's credential proxy via ANTHROPIC_BASE_URL.
   // No real secrets exist in the container environment.

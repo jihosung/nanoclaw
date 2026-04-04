@@ -14,6 +14,7 @@ const envConfig = readEnvFile([
   'TRANSLATOR_URL',
   'TRANSLATOR_MODEL',
   'AGENT_MODEL',
+  'OPENAI_API_KEY',
 ]);
 
 export const ASSISTANT_NAME =
@@ -69,6 +70,8 @@ export const TRANSLATOR_MODEL =
   'translategemma:4b';
 export const AGENT_MODEL =
   process.env.AGENT_MODEL || envConfig.AGENT_MODEL || '';
+export const OPENAI_API_KEY =
+  process.env.OPENAI_API_KEY || envConfig.OPENAI_API_KEY || '';
 export const MAX_MESSAGES_PER_PROMPT = Math.max(
   1,
   parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10,
