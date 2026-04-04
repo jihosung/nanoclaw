@@ -601,70 +601,16 @@ async function runScript(script: string): Promise<ScriptResult | null> {
 }
 
 // ---------------------------------------------------------------------------
-// Codex brain — OpenAI API-based agent with bash + file tools
+// Codex brain — @openai/codex CLI subprocess with OAuth credentials
 // ---------------------------------------------------------------------------
 
-interface OpenAIMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
-  tool_call_id?: string;
-  tool_calls?: Array<{
-    id: string;
-    type: 'function';
-    function: { name: string; arguments: string };
-  }>;
-}
-
 interface CodexSession {
-  messages: OpenAIMessage[];
+  /** Conversation turns for context injection on follow-up messages */
+  turns: Array<{ user: string; assistant: string }>;
 }
 
-const CODEX_SESSIONS_DIR = '/home/node/.claude/codex-sessions';
-const CODEX_TOOLS = [
-  {
-    type: 'function' as const,
-    function: {
-      name: 'bash',
-      description: 'Run a shell command in the group workspace (/workspace/group). Returns stdout+stderr.',
-      parameters: {
-        type: 'object',
-        properties: {
-          command: { type: 'string', description: 'Shell command to execute' },
-        },
-        required: ['command'],
-      },
-    },
-  },
-  {
-    type: 'function' as const,
-    function: {
-      name: 'read_file',
-      description: 'Read a file from /workspace/group. Path must be relative.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: 'Relative file path' },
-        },
-        required: ['path'],
-      },
-    },
-  },
-  {
-    type: 'function' as const,
-    function: {
-      name: 'write_file',
-      description: 'Write content to a file in /workspace/group. Creates parent dirs if needed.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: 'Relative file path' },
-          content: { type: 'string', description: 'File content' },
-        },
-        required: ['path', 'content'],
-      },
-    },
-  },
-];
+const CODEX_SESSIONS_DIR = '/home/node/.codex/nanoclaw-sessions';
+const CODEX_CLI_TIMEOUT_MS = 300_000; // 5 min — codex tasks can be slow
 
 function loadCodexSession(sessionId: string): CodexSession {
   const filePath = path.join(CODEX_SESSIONS_DIR, `${sessionId}.json`);
@@ -675,7 +621,7 @@ function loadCodexSession(sessionId: string): CodexSession {
       /* corrupted — start fresh */
     }
   }
-  return { messages: [] };
+  return { turns: [] };
 }
 
 function saveCodexSession(sessionId: string, session: CodexSession): void {
@@ -684,125 +630,112 @@ function saveCodexSession(sessionId: string, session: CodexSession): void {
   fs.writeFileSync(filePath, JSON.stringify(session, null, 2));
 }
 
-function generateSessionId(): string {
+function generateCodexSessionId(): string {
   return `codex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function runCodexTool(name: string, args: Record<string, string>): string {
-  try {
-    if (name === 'bash') {
-      const out = execSync(args.command, {
-        cwd: '/workspace/group',
-        encoding: 'utf-8',
-        timeout: 30_000,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      return out || '(no output)';
-    }
-    if (name === 'read_file') {
-      const resolved = path.join('/workspace/group', args.path);
-      return fs.readFileSync(resolved, 'utf-8');
-    }
-    if (name === 'write_file') {
-      const resolved = path.join('/workspace/group', args.path);
-      fs.mkdirSync(path.dirname(resolved), { recursive: true });
-      fs.writeFileSync(resolved, args.content);
-      return `Written: ${args.path}`;
-    }
-    return `Unknown tool: ${name}`;
-  } catch (err) {
-    return `Error: ${err instanceof Error ? err.message : String(err)}`;
-  }
+/**
+ * Build a prompt with conversation history prepended so Codex has context.
+ * Codex CLI has no --resume flag, so history is injected as plain text.
+ */
+function buildCodexPrompt(userMessage: string, session: CodexSession): string {
+  if (session.turns.length === 0) return userMessage;
+  const history = session.turns
+    .map((t) => `User: ${t.user}\nAssistant: ${t.assistant}`)
+    .join('\n\n');
+  return `[Previous conversation]\n${history}\n\n[Current message]\n${userMessage}`;
 }
 
-async function runCodexQuery(
-  prompt: string,
-  sessionId: string,
-  containerInput: ContainerInput,
-): Promise<{ text: string; newSessionId: string }> {
-  // Lazy import — only loaded when brain=codex
-  const { default: OpenAI } = await import('openai');
-  const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY || '',
-    baseURL: process.env.OPENAI_BASE_URL,
-  });
-  const model = process.env.OPENAI_MODEL || 'gpt-4o';
+/** Strip ANSI escape codes from terminal output */
+function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1B\][^\x07]*\x07/g, '');
+}
 
-  // Load or init session
-  const session = loadCodexSession(sessionId);
+/**
+ * Run the @openai/codex CLI for a single turn and return the output text.
+ * Credentials come from ~/.codex/ (written by `codex auth`).
+ */
+function runCodexCli(prompt: string): Promise<string> {
+  const { spawn } = require('child_process') as typeof import('child_process');
+  const model = process.env.OPENAI_MODEL || 'o4-mini';
 
-  // System prompt from CLAUDE.md if present
-  if (session.messages.length === 0) {
-    const claudeMdPath = '/workspace/group/CLAUDE.md';
-    const systemContent = fs.existsSync(claudeMdPath)
-      ? fs.readFileSync(claudeMdPath, 'utf-8')
-      : 'You are a helpful coding assistant with access to bash and file tools in /workspace/group.';
-    session.messages.push({ role: 'system', content: systemContent });
-  }
+  return new Promise((resolve, reject) => {
+    const args = [
+      '--model', model,
+      '--approval-mode', 'full-auto',
+      '--quiet',
+      prompt,
+    ];
 
-  session.messages.push({ role: 'user', content: prompt });
+    log(`Codex CLI: codex ${args.slice(0, -1).join(' ')} "<prompt>"`);
 
-  // Agentic loop — continue until no more tool calls
-  let finalText = '';
-  const MAX_ROUNDS = 20;
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const response = await openai.chat.completions.create({
-      model,
-      messages: session.messages as any,
-      tools: CODEX_TOOLS,
-      tool_choice: 'auto',
+    const proc = spawn('codex', args, {
+      cwd: '/workspace/group',
+      env: { ...process.env, CI: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    const choice = response.choices[0];
-    const msg = choice.message;
-    session.messages.push(msg as OpenAIMessage);
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
 
-    if (choice.finish_reason === 'tool_calls' && msg.tool_calls?.length) {
-      for (const tc of msg.tool_calls) {
-        let toolArgs: Record<string, string> = {};
-        try { toolArgs = JSON.parse(tc.function.arguments); } catch { /* ignore */ }
-        log(`Codex tool call: ${tc.function.name}(${tc.function.arguments.slice(0, 120)})`);
-        const result = runCodexTool(tc.function.name, toolArgs);
-        session.messages.push({
-          role: 'tool',
-          tool_call_id: tc.id,
-          content: result.slice(0, 8000), // cap tool output
-        });
+    const timer = setTimeout(() => {
+      proc.kill('SIGTERM');
+      reject(new Error(`Codex CLI timed out after ${CODEX_CLI_TIMEOUT_MS / 1000}s`));
+    }, CODEX_CLI_TIMEOUT_MS);
+
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0 && code !== null) {
+        reject(new Error(`codex exited ${code}: ${stderr.slice(0, 500)}`));
+        return;
       }
-      continue;
-    }
+      resolve(stripAnsi(stdout).trim() || stripAnsi(stderr).trim());
+    });
 
-    finalText = (msg.content ?? '').trim();
-    break;
-  }
-
-  saveCodexSession(sessionId, session);
-  return { text: finalText, newSessionId: sessionId };
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      // Provide a clear message if codex is not installed
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        reject(new Error('codex CLI not found — rebuild the container after adding @openai/codex'));
+      } else {
+        reject(err);
+      }
+    });
+  });
 }
 
 async function runCodexBrain(containerInput: ContainerInput): Promise<void> {
-  const sessionId = containerInput.sessionId || generateSessionId();
+  const sessionId = containerInput.sessionId || generateCodexSessionId();
   log(`Codex brain starting (session: ${sessionId})`);
 
-  let prompt = containerInput.prompt;
+  let userMessage = containerInput.prompt;
   if (containerInput.isScheduledTask) {
-    prompt = `[SCHEDULED TASK]\n\n${prompt}`;
+    userMessage = `[SCHEDULED TASK]\n\n${userMessage}`;
   }
   const pending = drainIpcInput();
-  if (pending.length > 0) prompt += '\n' + pending.join('\n');
+  if (pending.length > 0) userMessage += '\n' + pending.join('\n');
+
+  const session = loadCodexSession(sessionId);
 
   try {
     while (true) {
-      const { text, newSessionId } = await runCodexQuery(prompt, sessionId, containerInput);
-      writeOutput({ status: 'success', result: text || null, newSessionId });
+      const fullPrompt = buildCodexPrompt(userMessage, session);
+      const result = await runCodexCli(fullPrompt);
+
+      session.turns.push({ user: userMessage, assistant: result });
+      saveCodexSession(sessionId, session);
+
+      writeOutput({ status: 'success', result: result || null, newSessionId: sessionId });
 
       const nextMessage = await waitForIpcMessage();
       if (nextMessage === null) {
         log('Codex brain: close sentinel received, exiting');
         break;
       }
-      prompt = nextMessage;
+      userMessage = nextMessage;
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

@@ -159,11 +159,10 @@ function buildVolumeMounts(
       delete env.OPENAI_API_KEY;
       delete env.OPENAI_MODEL;
     } else if (brain === 'codex') {
-      // Codex brain — OpenAI API
-      const model = profile?.model || 'gpt-4o';
+      // Codex brain — @openai/codex CLI, credentials from codex auth
+      const model = profile?.model || 'o4-mini';
       env.OPENAI_MODEL = model;
-      if (OPENAI_API_KEY) env.OPENAI_API_KEY = OPENAI_API_KEY;
-      // Remove Claude-specific vars that shouldn't bleed into Codex containers
+      // Remove Claude-specific vars
       delete env.ANTHROPIC_MODEL;
       delete env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
       delete env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD;
@@ -195,6 +194,19 @@ function buildVolumeMounts(
     containerPath: '/home/node/.claude',
     readonly: false,
   });
+
+  // Codex brain: mount persistent credentials directory so `codex auth`
+  // tokens survive across container runs.  The directory is shared by all
+  // codex groups — credentials are user-level, not group-level.
+  if ((group.agentProfile?.brain ?? 'claude') === 'codex') {
+    const codexAuthDir = path.join(DATA_DIR, 'codex-auth');
+    fs.mkdirSync(codexAuthDir, { recursive: true });
+    mounts.push({
+      hostPath: codexAuthDir,
+      containerPath: '/home/node/.codex',
+      readonly: false,
+    });
+  }
 
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
