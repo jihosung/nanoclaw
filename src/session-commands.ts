@@ -1,5 +1,10 @@
+import { OPENAI_MODEL } from './config.js';
+import { readCodexAccountUsage } from './codex-account.js';
+import {
+  formatCodexModelStatus,
+  updateCodexRuntimeState,
+} from './codex-runtime-state.js';
 import { deleteSession, setRegisteredGroup } from './db.js';
-import { AGENT_MODEL, OPENAI_MODEL } from './config.js';
 import { logger } from './logger.js';
 import { GroupQueue } from './group-queue.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
@@ -8,9 +13,11 @@ export type SessionCommand =
   | { type: 'clear' }
   | { type: 'stop' }
   | { type: 'compact' }
-  | { type: 'model'; model: string };
+  | { type: 'model'; model: string }
+  | { type: 'usage' }
+  | { type: 'help' };
 
-const COMMAND_RE = /^\/(clear|stop|compact|model)(?:\s+(.+))?$/i;
+const COMMAND_RE = /^\/(clear|stop|compact|model|usage|help)(?:\s+(.+))?$/i;
 
 /**
  * Scan messages (latest first) for a session command.
@@ -29,6 +36,8 @@ export function extractCommand(messages: NewMessage[]): SessionCommand | null {
     if (cmd === 'stop') return { type: 'stop' };
     if (cmd === 'compact') return { type: 'compact' };
     if (cmd === 'model') return { type: 'model', model: arg };
+    if (cmd === 'usage') return { type: 'usage' };
+    if (cmd === 'help') return { type: 'help' };
   }
   return null;
 }
@@ -79,7 +88,7 @@ export async function handleSessionCommand(
     case 'stop': {
       const isActive = queue.isActive(chatJid);
       if (isActive) {
-        queue.closeStdin(chatJid); // signals turn/interrupt via _close sentinel
+        queue.closeStdin(chatJid);
         logger.info({ group: group.name }, '/stop command: sent close signal');
         await channel.sendMessage(chatJid, 'Agent stop signal sent.');
       } else {
@@ -89,8 +98,6 @@ export async function handleSessionCommand(
     }
 
     case 'compact': {
-      // Pipe /compact to the active container (Claude Code built-in command).
-      // If no container is running, reply with an error — there's nothing to compact.
       const piped = queue.sendMessage(chatJid, '/compact');
       if (!piped) {
         await channel.sendMessage(
@@ -103,22 +110,23 @@ export async function handleSessionCommand(
 
     case 'model': {
       if (!command.model) {
-        const brain = group.agentProfile?.brain ?? 'claude';
-        const override = group.agentProfile?.model;
-        const fallback =
-          brain === 'codex' ? OPENAI_MODEL || 'o4-mini' : AGENT_MODEL || '(claude default)';
-        const display = override
-          ? `\`${override}\``
-          : `(default → \`${fallback}\`)`;
-        await channel.sendMessage(chatJid, `Current model: ${display}`);
+        const fallback = OPENAI_MODEL || 'gpt-5.4';
+        await channel.sendMessage(
+          chatJid,
+          formatCodexModelStatus(chatJid, fallback),
+        );
         break;
       }
+
       group.agentProfile = {
-        brain: group.agentProfile?.brain ?? 'claude',
+        brain: 'codex',
         ...group.agentProfile,
         model: command.model,
       };
       setRegisteredGroup(chatJid, group);
+      updateCodexRuntimeState(chatJid, {
+        requestedModel: command.model,
+      });
       logger.info(
         { group: group.name, model: command.model },
         'Model updated via /model command',
@@ -127,6 +135,39 @@ export async function handleSessionCommand(
         chatJid,
         `Model set to \`${command.model}\`. Applies from next message.`,
       );
+      break;
+    }
+
+    case 'usage': {
+      try {
+        const usage = await readCodexAccountUsage();
+        await channel.setTyping?.(chatJid, false);
+        await channel.sendMessage(chatJid, usage);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await channel.setTyping?.(chatJid, false);
+        await channel.sendMessage(
+          chatJid,
+          `Failed to read Codex account usage: ${message}`,
+        );
+      }
+      break;
+    }
+
+    case 'help': {
+      const lines = [
+        'Commands',
+        '- `/help`: Show available commands',
+        '- `/clear`: Clear the current conversation session',
+        '- `/stop`: Stop the active agent response',
+        '- `/compact`: Compact the active session context',
+        '- `/model`: Show the current model and available models',
+        '- `/model [model name]`: Change the model for the next message',
+        '- `/usage`: Show Codex account usage and reset times',
+      ];
+
+      await channel.setTyping?.(chatJid, false);
+      await channel.sendMessage(chatJid, lines.join('\n'));
       break;
     }
   }

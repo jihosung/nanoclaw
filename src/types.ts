@@ -34,13 +34,12 @@ export interface ContainerConfig {
 
 /**
  * Which agent brain to use for a group.
- * - 'claude': Claude Code via Anthropic SDK (default)
- * - 'codex':  OpenAI-based coding agent via OpenAI API
+ * NanoClaw host is Codex-only.
  */
-export type BrainType = 'claude' | 'codex';
+export type BrainType = 'codex';
 
 /**
- * Per-group agent profile. Absent means default Claude behavior.
+ * Per-group agent profile. Absent means default Codex behavior.
  * Extra env vars are merged into the group's settings.json at container
  * startup, so they are available inside the running agent.
  */
@@ -58,7 +57,7 @@ export interface RegisteredGroup {
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
-  agentProfile?: AgentProfile; // Optional brain override; absent = default Claude
+  agentProfile?: AgentProfile; // Optional brain override; absent = default Codex
 }
 
 export interface NewMessage {

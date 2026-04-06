@@ -449,14 +449,10 @@ export async function processTaskIpc(
         // updates (e.g. adding additionalMounts) don't strip the flag.
         // Validate agentProfile.brain if provided
         const profile = data.agentProfile;
-        if (
-          profile &&
-          profile.brain !== 'claude' &&
-          profile.brain !== 'codex'
-        ) {
+        if (profile && profile.brain !== 'codex') {
           logger.warn(
             { sourceGroup, brain: profile.brain },
-            'Invalid register_group request - unknown brain type',
+            'Invalid register_group request - unsupported brain type',
           );
           break;
         }
@@ -497,7 +493,7 @@ export async function processTaskIpc(
         deps.registerGroup(data.jid, {
           ...existingGroup,
           agentProfile: {
-            brain: existingGroup.agentProfile?.brain ?? 'claude',
+            brain: existingGroup.agentProfile?.brain ?? 'codex',
             ...existingGroup.agentProfile,
             model: data.model,
           },

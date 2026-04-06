@@ -7,7 +7,6 @@ import fs from 'fs';
 import path from 'path';
 
 import {
-  AGENT_MODEL,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
@@ -19,6 +18,7 @@ import {
   OPENAI_MODEL,
   TIMEZONE,
 } from './config.js';
+import { updateCodexRuntimeState } from './codex-runtime-state.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -71,7 +71,7 @@ function buildVolumeMounts(
 
   if (isMain) {
     // Main gets the project root read-only. Writable paths the agent needs
-    // (group folder, IPC, .claude/) are mounted separately below.
+    // (group folder, IPC, per-group settings) are mounted separately below.
     // Read-only prevents the agent from modifying host application code
     // (src/, dist/, package.json, etc.) which would bypass the sandbox
     // entirely on next restart.
@@ -118,14 +118,8 @@ function buildVolumeMounts(
     }
   }
 
-  // Per-group Claude sessions directory (isolated from other groups)
-  // Each group gets their own .claude/ to prevent cross-group session access
-  const groupSessionsDir = path.join(
-    DATA_DIR,
-    'sessions',
-    group.folder,
-    '.claude',
-  );
+  // Per-group agent settings directory (isolated from other groups)
+  const groupSessionsDir = path.join(DATA_DIR, 'sessions', group.folder, '.agent');
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   {
@@ -140,35 +134,17 @@ function buildVolumeMounts(
     }
     const env = (settings.env as Record<string, string> | undefined) ?? {};
     const profile = group.agentProfile;
-    const brain = profile?.brain ?? 'claude';
+    const brain = profile?.brain ?? 'codex';
 
     // Always inject the brain type so the agent-runner can dispatch
     env.BRAIN_TYPE = brain;
 
-    if (brain === 'claude') {
-      // Claude Code runtime flags
-      env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1';
-      env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = '1';
-      env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '0';
-      // Model — per-group override takes priority over global AGENT_MODEL
-      const model = profile?.model || AGENT_MODEL;
-      if (model) {
-        env.ANTHROPIC_MODEL = model;
-      } else {
-        delete env.ANTHROPIC_MODEL;
-      }
-      delete env.OPENAI_API_KEY;
-      delete env.OPENAI_MODEL;
-    } else if (brain === 'codex') {
-      // Codex brain — @openai/codex CLI, credentials from codex auth
-      const model = profile?.model || OPENAI_MODEL || 'o4-mini';
-      env.OPENAI_MODEL = model;
-      // Remove Claude-specific vars
-      delete env.ANTHROPIC_MODEL;
-      delete env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
-      delete env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD;
-      delete env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
-    }
+    const model = profile?.model || OPENAI_MODEL || 'gpt-5.4';
+    env.OPENAI_MODEL = model;
+    delete env.ANTHROPIC_MODEL;
+    delete env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
+    delete env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD;
+    delete env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
 
     // Merge any extra env vars from the profile (last — intentionally overridable)
     if (profile?.env) {
@@ -179,7 +155,7 @@ function buildVolumeMounts(
     fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
   }
 
-  // Sync skills from container/skills/ into each group's .claude/skills/
+  // Sync skills from container/skills/ into each group's settings directory
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
   if (fs.existsSync(skillsSrc)) {
@@ -192,14 +168,14 @@ function buildVolumeMounts(
   }
   mounts.push({
     hostPath: groupSessionsDir,
-    containerPath: '/home/node/.claude',
+    containerPath: '/home/node/.nanoclaw-agent',
     readonly: false,
   });
 
-  // Codex brain: mount persistent credentials directory so `codex auth`
+  // Mount persistent credentials directory so `codex auth`
   // tokens survive across container runs.  The directory is shared by all
   // codex groups — credentials are user-level, not group-level.
-  if ((group.agentProfile?.brain ?? 'claude') === 'codex') {
+  if ((group.agentProfile?.brain ?? 'codex') === 'codex') {
     const codexAuthDir = path.join(DATA_DIR, 'codex-auth');
     fs.mkdirSync(codexAuthDir, { recursive: true });
     mounts.push({
@@ -363,12 +339,10 @@ export async function runContainerAgent(
     {
       group: group.name,
       containerName,
-      brain: group.agentProfile?.brain ?? 'claude',
+      brain: group.agentProfile?.brain ?? 'codex',
       model:
         group.agentProfile?.model ||
-        (group.agentProfile?.brain === 'codex'
-          ? OPENAI_MODEL || 'o4-mini'
-          : AGENT_MODEL || '(default)'),
+        (OPENAI_MODEL || 'gpt-5.4'),
       mountCount: mounts.length,
       isMain: input.isMain,
     },
@@ -455,18 +429,30 @@ export async function runContainerAgent(
       const lines = chunk.trim().split('\n');
       for (const line of lines) {
         if (!line) continue;
-        const configReadMatch = line.match(/\[agent-runner\] Codex config\/read:\s*(.+)/);
-        const configModelMatch = line.match(/\[agent-runner\] Codex config model:\s*(.+)/);
+        const configReadMatch = line.match(
+          /\[agent-runner\] Codex config\/read:\s*(.+)/,
+        );
+        const configModelMatch = line.match(
+          /\[agent-runner\] Codex config model:\s*(.+)/,
+        );
         const modelMatch =
           line.match(/\[app-server\] active model:\s*(.+)/) ||
           line.match(/\[agent-runner\] Codex model:\s*(.+)/);
-        const availableMatch = line.match(/\[agent-runner\] Codex available models:\s*(.+)/);
+        const availableMatch = line.match(
+          /\[agent-runner\] Codex available models:\s*(.+)/,
+        );
         if (configReadMatch) {
           try {
             const parsed = JSON.parse(configReadMatch[1].trim());
-            logger.info({ group: group.name, config: parsed }, 'Codex config/read');
+            logger.debug(
+              { group: group.name, config: parsed },
+              'Codex config/read',
+            );
           } catch {
-            logger.info({ group: group.name, raw: configReadMatch[1].trim() }, 'Codex config/read');
+            logger.debug(
+              { group: group.name, raw: configReadMatch[1].trim() },
+              'Codex config/read',
+            );
           }
         } else if (configModelMatch) {
           logger.info(
@@ -474,11 +460,17 @@ export async function runContainerAgent(
             'Codex actual model (config)',
           );
         } else if (availableMatch) {
+          updateCodexRuntimeState(input.chatJid, {
+            availableModels: availableMatch[1].trim(),
+          });
           logger.info(
             { group: group.name, models: availableMatch[1].trim() },
             'Codex available models',
           );
         } else if (modelMatch) {
+          updateCodexRuntimeState(input.chatJid, {
+            requestedModel: modelMatch[1].trim(),
+          });
           logger.info(
             { group: group.name, model: modelMatch[1].trim() },
             'Codex requested model',

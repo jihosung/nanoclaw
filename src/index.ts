@@ -18,6 +18,7 @@ import {
   TRANSLATOR_MODEL,
 } from './config.js';
 import { translateToEnglish, translateToKorean } from './translator.js';
+import { toUserFacingAgentError } from './agent-errors.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -55,11 +56,6 @@ import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
-  restoreRemoteControl,
-  startRemoteControl,
-  stopRemoteControl,
-} from './remote-control.js';
-import {
   isSenderAllowed,
   isTriggerAllowed,
   loadSenderAllowlist,
@@ -68,10 +64,7 @@ import {
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
-import {
-  extractCommand,
-  handleSessionCommand,
-} from './session-commands.js';
+import { extractCommand, handleSessionCommand } from './session-commands.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -79,7 +72,7 @@ export { escapeXml, formatMessages } from './router.js';
 const LOG_PREVIEW_LEN = 120;
 function preview(text: string): string {
   return text.length > LOG_PREVIEW_LEN
-    ? text.slice(0, LOG_PREVIEW_LEN) + '…'
+    ? text.slice(0, LOG_PREVIEW_LEN) + '...'
     : text;
 }
 
@@ -174,14 +167,14 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   // Create group folder
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
 
-  // Copy CLAUDE.md template into the new group folder so agents have
-  // identity and instructions from the first run.  (Fixes #1391)
-  const groupMdFile = path.join(groupDir, 'CLAUDE.md');
+  // Copy AGENTS.md template into the new group folder so agents have
+  // identity and instructions from the first run.
+  const groupMdFile = path.join(groupDir, 'AGENTS.md');
   if (!fs.existsSync(groupMdFile)) {
     const templateFile = path.join(
       GROUPS_DIR,
       group.isMain ? 'main' : 'global',
-      'CLAUDE.md',
+      'AGENTS.md',
     );
     if (fs.existsSync(templateFile)) {
       let content = fs.readFileSync(templateFile, 'utf-8');
@@ -190,7 +183,7 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
         content = content.replace(/You are Andy/g, `You are ${ASSISTANT_NAME}`);
       }
       fs.writeFileSync(groupMdFile, content);
-      logger.info({ folder: group.folder }, 'Created CLAUDE.md from template');
+      logger.info({ folder: group.folder }, 'Created AGENTS.md from template');
     }
   }
 
@@ -300,22 +293,22 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
+  let suppressRetry = false;
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
+    // Streaming output callback ??called for each agent result
     if (result.result) {
       const raw =
         typeof result.result === 'string'
           ? result.result
           : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+      // Strip <internal>...</internal> blocks ??agent uses these for internal reasoning
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info(
         { group: group.name, output: preview(text) },
         `Agent output: ${raw.length} chars`,
       );
       if (text) {
-        await channel.setTyping?.(chatJid, false);
         const outText =
           TRANSLATOR_ENABLED && TRANSLATOR_URL
             ? await translateToKorean(text, TRANSLATOR_URL, TRANSLATOR_MODEL)
@@ -328,7 +321,20 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
 
     if (result.status === 'success') {
+      if (result.result === null) {
+        await channel.setTyping?.(chatJid, false);
+      }
       queue.notifyIdle(chatJid);
+    }
+
+    if (result.status === 'error' && result.error) {
+      await channel.setTyping?.(chatJid, false);
+      const userFacingError = toUserFacingAgentError(result.error);
+      if (userFacingError) {
+        await channel.sendMessage(chatJid, userFacingError.text);
+        outputSentToUser = true;
+        suppressRetry = userFacingError.suppressRetry;
+      }
     }
 
     if (result.status === 'error') {
@@ -340,12 +346,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   if (idleTimer) clearTimeout(idleTimer);
 
   if (output === 'error' || hadError) {
-    // If we already sent output to the user, don't roll back the cursor —
-    // the user got their response and re-processing would send duplicates.
+    // If we already sent output to the user, don't roll back the cursor ??    // the user got their response and re-processing would send duplicates.
     if (outputSentToUser) {
       logger.warn(
-        { group: group.name },
-        'Agent error after output was sent, skipping cursor rollback to prevent duplicates',
+        { group: group.name, suppressRetry },
+        'Agent error after user-visible output, skipping cursor rollback',
       );
       return true;
     }
@@ -430,7 +435,7 @@ async function runAgent(
     }
 
     if (output.status === 'error') {
-      // Detect stale/corrupt session — clear it so the next retry starts fresh.
+      // Detect stale/corrupt session ??clear it so the next retry starts fresh.
       // The session .jsonl can go missing after a crash mid-write, manual
       // deletion, or disk-full. The existing backoff in group-queue.ts
       // handles the retry; we just need to remove the broken session ID.
@@ -444,7 +449,7 @@ async function runAgent(
       if (isStaleSession) {
         logger.warn(
           { group: group.name, staleSessionId: sessionId, error: output.error },
-          'Stale session detected — clearing for next retry',
+          'Stale session detected ??clearing for next retry',
         );
         delete sessions[group.folder];
         deleteSession(group.folder);
@@ -576,7 +581,7 @@ async function startMessageLoop(): Promise<void> {
                 logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
               );
           } else {
-            // No active container — enqueue for a new one
+            // No active container ??enqueue for a new one
             queue.enqueueMessageCheck(chatJid);
           }
         }
@@ -627,7 +632,6 @@ async function main(): Promise<void> {
     ensureOneCLIAgent(jid, group);
   }
 
-  restoreRemoteControl();
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
@@ -639,60 +643,9 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 
-  // Handle /remote-control and /remote-control-end commands
-  async function handleRemoteControl(
-    command: string,
-    chatJid: string,
-    msg: NewMessage,
-  ): Promise<void> {
-    const group = registeredGroups[chatJid];
-    if (!group?.isMain) {
-      logger.warn(
-        { chatJid, sender: msg.sender },
-        'Remote control rejected: not main group',
-      );
-      return;
-    }
-
-    const channel = findChannel(channels, chatJid);
-    if (!channel) return;
-
-    if (command === '/remote-control') {
-      const result = await startRemoteControl(
-        msg.sender,
-        chatJid,
-        process.cwd(),
-      );
-      if (result.ok) {
-        await channel.sendMessage(chatJid, result.url);
-      } else {
-        await channel.sendMessage(
-          chatJid,
-          `Remote Control failed: ${result.error}`,
-        );
-      }
-    } else {
-      const result = stopRemoteControl();
-      if (result.ok) {
-        await channel.sendMessage(chatJid, 'Remote Control session ended.');
-      } else {
-        await channel.sendMessage(chatJid, result.error);
-      }
-    }
-  }
-
   // Channel callbacks (shared by all channels)
   const channelOpts = {
     onMessage: async (chatJid: string, msg: NewMessage) => {
-      // Remote control commands — intercept before storage
-      const trimmed = msg.content.trim();
-      if (trimmed === '/remote-control' || trimmed === '/remote-control-end') {
-        handleRemoteControl(trimmed, chatJid, msg).catch((err) =>
-          logger.error({ err, chatJid }, 'Remote control command error'),
-        );
-        return;
-      }
-
       // Sender allowlist drop mode: discard messages from denied senders before storing
       if (!msg.is_from_me && !msg.is_bot_message && registeredGroups[chatJid]) {
         const cfg = loadSenderAllowlist();
@@ -759,7 +712,7 @@ async function main(): Promise<void> {
     if (!channel) {
       logger.warn(
         { channel: channelName },
-        'Channel installed but credentials missing — skipping. Check .env or re-run the channel skill.',
+        'Channel installed but credentials missing ??skipping. Check .env or re-run the channel skill.',
       );
       continue;
     }

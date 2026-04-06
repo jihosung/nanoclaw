@@ -41,9 +41,7 @@ function stripUntranslatable(text: string): {
     .replace(/https?:\/\/\S+/g, (match) => {
       blocks.push(match);
       return placeholder(blocks.length - 1);
-    })
-    ;
-
+    });
   return { stripped, blocks };
 }
 
