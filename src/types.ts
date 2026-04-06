@@ -46,8 +46,8 @@ export type BrainType = 'claude' | 'codex';
  */
 export interface AgentProfile {
   brain: BrainType;
-  model?: string;                    // Override global AGENT_MODEL / default model
-  env?: Record<string, string>;      // Extra env vars injected into the container
+  model?: string; // Override global AGENT_MODEL / default model
+  env?: Record<string, string>; // Extra env vars injected into the container
 }
 
 export interface RegisteredGroup {

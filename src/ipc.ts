@@ -174,6 +174,8 @@ export async function processTaskIpc(
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
     agentProfile?: RegisteredGroup['agentProfile'];
+    // For update_model
+    model?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -447,7 +449,11 @@ export async function processTaskIpc(
         // updates (e.g. adding additionalMounts) don't strip the flag.
         // Validate agentProfile.brain if provided
         const profile = data.agentProfile;
-        if (profile && profile.brain !== 'claude' && profile.brain !== 'codex') {
+        if (
+          profile &&
+          profile.brain !== 'claude' &&
+          profile.brain !== 'codex'
+        ) {
           logger.warn(
             { sourceGroup, brain: profile.brain },
             'Invalid register_group request - unknown brain type',
@@ -470,6 +476,38 @@ export async function processTaskIpc(
           { data },
           'Invalid register_group request - missing required fields',
         );
+      }
+      break;
+
+    case 'update_model':
+      // Only main group can update models
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized update_model attempt blocked',
+        );
+        break;
+      }
+      if (data.jid && data.model) {
+        const existingGroup = registeredGroups[data.jid];
+        if (!existingGroup) {
+          logger.warn({ jid: data.jid }, 'update_model: group not found');
+          break;
+        }
+        deps.registerGroup(data.jid, {
+          ...existingGroup,
+          agentProfile: {
+            brain: existingGroup.agentProfile?.brain ?? 'claude',
+            ...existingGroup.agentProfile,
+            model: data.model,
+          },
+        });
+        logger.info(
+          { jid: data.jid, model: data.model },
+          'Model updated via IPC',
+        );
+      } else {
+        logger.warn({ data }, 'update_model: missing jid or model');
       }
       break;
 

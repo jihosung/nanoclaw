@@ -610,8 +610,6 @@ async function runScript(script: string): Promise<ScriptResult | null> {
 // ---------------------------------------------------------------------------
 
 const CODEX_GROUP_DIR = '/workspace/group';
-const CODEX_MODEL = process.env.OPENAI_MODEL || '';
-const CODEX_EFFORT = process.env.CODEX_EFFORT || '';
 
 /**
  * Run a single app-server turn, with IPC polling for steering/interruption.
@@ -621,6 +619,8 @@ async function executeAppServerTurn(
   client: CodexAppServerClient,
   threadId: string,
   prompt: string,
+  model: string,
+  effort: string,
   retryCount = 0,
 ): Promise<{ result: string | null; error?: string; closed: boolean }> {
   let lastProgressMessage: string | null = null;
@@ -631,8 +631,8 @@ async function executeAppServerTurn(
     [{ type: 'text', text: prompt }] satisfies AppServerInputItem[],
     {
       cwd: CODEX_GROUP_DIR,
-      model: CODEX_MODEL || undefined,
-      effort: CODEX_EFFORT || undefined,
+      model: model || undefined,
+      effort: effort || undefined,
       onProgress: (message) => {
         const trimmed = message.trim();
         if (!trimmed || trimmed === lastProgressMessage) return;
@@ -680,7 +680,7 @@ async function executeAppServerTurn(
     }
     if (state.status === 'interrupted' && retryCount < 1) {
       log('Codex turn interrupted unexpectedly — retrying once');
-      return executeAppServerTurn(client, threadId, prompt, retryCount + 1);
+      return executeAppServerTurn(client, threadId, prompt, model, effort, retryCount + 1);
     }
     return {
       result,
@@ -693,7 +693,10 @@ async function executeAppServerTurn(
 }
 
 async function runCodexBrain(containerInput: ContainerInput): Promise<void> {
+  const CODEX_MODEL = process.env.OPENAI_MODEL || '';
+  const CODEX_EFFORT = process.env.CODEX_EFFORT || '';
   log(`Codex brain starting (app-server, session: ${containerInput.sessionId || 'new'})`);
+  log(`Codex model: ${CODEX_MODEL || 'default'}`);
 
   let prompt = containerInput.prompt;
   if (containerInput.isScheduledTask) {
@@ -704,6 +707,15 @@ async function runCodexBrain(containerInput: ContainerInput): Promise<void> {
 
   const client = new CodexAppServerClient({ cwd: CODEX_GROUP_DIR, log });
   await client.start();
+
+  // Log available models and actual config at startup
+  try {
+    const models = await client.listModels();
+    const modelNames = models.map((m) => `${m.id}${m.isDefault ? ' (default)' : ''}`).join(', ');
+    log(`Codex available models: ${modelNames}`);
+  } catch (err) {
+    log(`model/list failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   let threadId: string;
   try {
@@ -725,9 +737,17 @@ async function runCodexBrain(containerInput: ContainerInput): Promise<void> {
       log(`App-server thread restarted (${threadId})`);
     }
 
+    // Log actual effective config model
+    try {
+      const config = await client.readConfig();
+      log(`Codex config/read: ${JSON.stringify(config)}`);
+    } catch (err) {
+      log(`Codex config/read failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     while (true) {
       log(`Starting Codex turn (thread: ${threadId})...`);
-      const { result, error, closed } = await executeAppServerTurn(client, threadId, prompt);
+      const { result, error, closed } = await executeAppServerTurn(client, threadId, prompt, CODEX_MODEL, CODEX_EFFORT);
 
       if (error) {
         log(`Codex turn error: ${error}`);
@@ -784,6 +804,30 @@ async function main(): Promise<void> {
       error: `Failed to parse input: ${err instanceof Error ? err.message : String(err)}`,
     });
     process.exit(1);
+  }
+
+  // Load env vars from ~/.claude/settings.json into process.env so BRAIN_TYPE,
+  // OPENAI_MODEL, etc. are visible to the dispatcher and Codex runner.
+  // settings.json is written by the host container-runner before each run.
+  // Docker -e vars take precedence (we only set keys that aren't already set).
+  try {
+    const settingsPath = path.join(
+      process.env.HOME || '/home/node',
+      '.claude',
+      'settings.json',
+    );
+    const settingsEnv = (
+      JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as {
+        env?: Record<string, string>;
+      }
+    ).env;
+    if (settingsEnv) {
+      for (const [key, value] of Object.entries(settingsEnv)) {
+        if (!(key in process.env)) process.env[key] = value;
+      }
+    }
+  } catch {
+    /* settings.json absent or unreadable — use process.env as-is */
   }
 
   // Brain dispatcher — route to the appropriate agent based on BRAIN_TYPE env var

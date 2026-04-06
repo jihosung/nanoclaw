@@ -2,8 +2,6 @@
 // Adapted for NanoClaw: removed EJClaw-specific role/reviewer logic.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
-import { createRequire } from 'module';
-import path from 'path';
 
 import {
   createInitialAppServerTurnState,
@@ -78,7 +76,6 @@ export class CodexAppServerClient {
   private readonly env: NodeJS.ProcessEnv;
   private readonly log: (message: string) => void;
   private readonly pending = new Map<number, PendingRequest>();
-  private readonly require = createRequire(import.meta.url);
   private nextId = 1;
   private stdoutBuffer = '';
   private activeTurn: ActiveTurn | null = null;
@@ -93,10 +90,10 @@ export class CodexAppServerClient {
   async start(): Promise<void> {
     if (this.proc) return;
 
-    const codexPackagePath = this.require.resolve('@openai/codex/package.json');
-    const codexBin = path.join(path.dirname(codexPackagePath), 'bin', 'codex.js');
-
-    this.proc = spawn(process.execPath, [codexBin, 'app-server'], {
+    // @openai/codex is installed globally in the container image (npm install -g).
+    // Spawn the `codex` binary from PATH rather than resolving via require(),
+    // which only searches local node_modules and would fail here.
+    this.proc = spawn('codex', ['app-server'], {
       cwd: this.cwd,
       env: this.env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -176,9 +173,12 @@ export class CodexAppServerClient {
       ? await this.request('thread/resume', { threadId: sessionId, ...params })
       : await this.request('thread/start', params);
 
-    const thread = (result as { thread?: { id?: string } }).thread;
+    const thread = (result as { thread?: { id?: string; model?: string } }).thread;
     if (!thread?.id) {
       throw new Error('Codex app-server did not return a thread id.');
+    }
+    if (thread.model) {
+      this.log(`[app-server] active model: ${thread.model}`);
     }
     return thread.id;
   }
@@ -245,6 +245,15 @@ export class CodexAppServerClient {
       },
       wait: async () => turnPromise,
     };
+  }
+
+  async listModels(): Promise<{ id: string; displayName?: string; isDefault?: boolean }[]> {
+    const result = await this.request('model/list', { limit: 50, includeHidden: false });
+    return ((result as { data?: { id: string; displayName?: string; isDefault?: boolean }[] }).data) ?? [];
+  }
+
+  async readConfig(): Promise<Record<string, unknown>> {
+    return (await this.request('config/read', {})) as Record<string, unknown>;
   }
 
   async startCompaction(threadId: string): Promise<CodexAppServerTurnResult> {

@@ -21,11 +21,14 @@ function containsKorean(text: string): boolean {
   return false;
 }
 
-function stripUntranslatable(text: string): { stripped: string; blocks: string[] } {
+function stripUntranslatable(text: string): {
+  stripped: string;
+  blocks: string[];
+} {
   const blocks: string[] = [];
   const placeholder = (i: number) => `\x00BLOCK${i}\x00`;
 
-  // Order matters: code blocks first (may contain URLs), then attachment links, then bare URLs
+  // Order matters: code blocks first (may contain URLs), then attachment links, then bare URLs, then @mentions
   const stripped = text
     .replace(/```[\s\S]*?```/g, (match) => {
       blocks.push(match);
@@ -38,7 +41,8 @@ function stripUntranslatable(text: string): { stripped: string; blocks: string[]
     .replace(/https?:\/\/\S+/g, (match) => {
       blocks.push(match);
       return placeholder(blocks.length - 1);
-    });
+    })
+    ;
 
   return { stripped, blocks };
 }
@@ -100,7 +104,7 @@ export async function translateToEnglish(
 
   try {
     logger.info({ input: preview(stripped) }, '[translator] KO→EN start');
-    const prompt = `Translate the following text to English. Output only the translation, no explanations or labels.\n\n${stripped}`;
+    const prompt = `Translate the following text to English. Keep @mentions (e.g. @Andy) unchanged. Output only the translation, no explanations or labels.\n\n${stripped}`;
     const translated = await callOllama(translatorUrl, model, prompt);
     const result = restoreUntranslatable(translated, blocks);
     logger.info(
@@ -126,7 +130,7 @@ export async function translateToKorean(
 
   try {
     logger.info({ input: preview(stripped) }, '[translator] EN→KO start');
-    const prompt = `Translate the following text to Korean. Output only the translation, no explanations or labels.\n\n${stripped}`;
+    const prompt = `Translate the following text to Korean. Keep @mentions (e.g. @Andy) unchanged. Output only the translation, no explanations or labels.\n\n${stripped}`;
     const translated = await callOllama(translatorUrl, model, prompt);
     const result = restoreUntranslatable(translated, blocks);
     logger.info(

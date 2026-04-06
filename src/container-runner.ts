@@ -16,6 +16,7 @@ import {
   IDLE_TIMEOUT,
   ONECLI_URL,
   OPENAI_API_KEY,
+  OPENAI_MODEL,
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
@@ -160,7 +161,7 @@ function buildVolumeMounts(
       delete env.OPENAI_MODEL;
     } else if (brain === 'codex') {
       // Codex brain — @openai/codex CLI, credentials from codex auth
-      const model = profile?.model || 'o4-mini';
+      const model = profile?.model || OPENAI_MODEL || 'o4-mini';
       env.OPENAI_MODEL = model;
       // Remove Claude-specific vars
       delete env.ANTHROPIC_MODEL;
@@ -236,13 +237,17 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
-    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
+    // Recopy if cache is missing or any source file is newer than its cached counterpart
     const needsCopy =
       !fs.existsSync(groupAgentRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
+      fs.readdirSync(agentRunnerSrc).some((f) => {
+        const src = path.join(agentRunnerSrc, f);
+        const dst = path.join(groupAgentRunnerDir, f);
+        return (
+          !fs.existsSync(dst) ||
+          fs.statSync(src).mtimeMs > fs.statSync(dst).mtimeMs
+        );
+      });
     if (needsCopy) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
@@ -358,6 +363,12 @@ export async function runContainerAgent(
     {
       group: group.name,
       containerName,
+      brain: group.agentProfile?.brain ?? 'claude',
+      model:
+        group.agentProfile?.model ||
+        (group.agentProfile?.brain === 'codex'
+          ? OPENAI_MODEL || 'o4-mini'
+          : AGENT_MODEL || '(default)'),
       mountCount: mounts.length,
       isMain: input.isMain,
     },
@@ -443,7 +454,38 @@ export async function runContainerAgent(
       const chunk = data.toString();
       const lines = chunk.trim().split('\n');
       for (const line of lines) {
-        if (line) logger.debug({ container: group.folder }, line);
+        if (!line) continue;
+        const configReadMatch = line.match(/\[agent-runner\] Codex config\/read:\s*(.+)/);
+        const configModelMatch = line.match(/\[agent-runner\] Codex config model:\s*(.+)/);
+        const modelMatch =
+          line.match(/\[app-server\] active model:\s*(.+)/) ||
+          line.match(/\[agent-runner\] Codex model:\s*(.+)/);
+        const availableMatch = line.match(/\[agent-runner\] Codex available models:\s*(.+)/);
+        if (configReadMatch) {
+          try {
+            const parsed = JSON.parse(configReadMatch[1].trim());
+            logger.info({ group: group.name, config: parsed }, 'Codex config/read');
+          } catch {
+            logger.info({ group: group.name, raw: configReadMatch[1].trim() }, 'Codex config/read');
+          }
+        } else if (configModelMatch) {
+          logger.info(
+            { group: group.name, model: configModelMatch[1].trim() },
+            'Codex actual model (config)',
+          );
+        } else if (availableMatch) {
+          logger.info(
+            { group: group.name, models: availableMatch[1].trim() },
+            'Codex available models',
+          );
+        } else if (modelMatch) {
+          logger.info(
+            { group: group.name, model: modelMatch[1].trim() },
+            'Codex requested model',
+          );
+        } else {
+          logger.debug({ container: group.folder }, line);
+        }
       }
       // Don't reset timeout on stderr — SDK writes debug logs continuously.
       // Timeout only resets on actual output (OUTPUT_MARKER in stdout).

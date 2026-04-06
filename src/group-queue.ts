@@ -178,6 +178,24 @@ export class GroupQueue {
   }
 
   /**
+   * Returns true if a container is currently active for the group.
+   */
+  isActive(groupJid: string): boolean {
+    return this.getGroup(groupJid).active;
+  }
+
+  /**
+   * Force-kill the active container process.
+   * Returns true if a process was running and was killed.
+   */
+  killProcess(groupJid: string): boolean {
+    const state = this.getGroup(groupJid);
+    if (!state.process || state.process.killed) return false;
+    state.process.kill();
+    return true;
+  }
+
+  /**
    * Signal the active container to wind down by writing a close sentinel.
    */
   closeStdin(groupJid: string): void {

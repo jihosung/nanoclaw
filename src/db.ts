@@ -641,9 +641,7 @@ export function getRegisteredGroup(
     requiresTrigger:
       row.requires_trigger === null ? undefined : row.requires_trigger === 1,
     isMain: row.is_main === 1 ? true : undefined,
-    agentProfile: row.agent_profile
-      ? JSON.parse(row.agent_profile)
-      : undefined,
+    agentProfile: row.agent_profile ? JSON.parse(row.agent_profile) : undefined,
   };
 }
 

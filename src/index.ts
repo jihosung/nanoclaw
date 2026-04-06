@@ -68,6 +68,10 @@ import {
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import {
+  extractCommand,
+  handleSessionCommand,
+} from './session-commands.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -522,6 +526,23 @@ async function startMessageLoop(): Promise<void> {
                   isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
             );
             if (!hasTrigger) continue;
+          }
+
+          // Check for session commands (/clear, /stop, /compact, /model)
+          // before routing to the agent. Commands are handled host-side.
+          const command = extractCommand(groupMessages);
+          if (command) {
+            await handleSessionCommand(command, {
+              chatJid,
+              group,
+              lastMessage: groupMessages[groupMessages.length - 1],
+              sessions,
+              lastAgentTimestamp,
+              queue,
+              channel,
+              saveState,
+            });
+            continue;
           }
 
           // Pull all messages since lastAgentTimestamp so non-trigger
