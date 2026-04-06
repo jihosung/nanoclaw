@@ -125,7 +125,15 @@ function buildVolumeMounts(
     group.folder,
     '.agent',
   );
+  const pythonUserBase = '/home/node/.nanoclaw-agent/python-userbase';
+  const npmPrefix = '/home/node/.nanoclaw-agent/npm-global';
   fs.mkdirSync(groupSessionsDir, { recursive: true });
+  fs.mkdirSync(path.join(groupSessionsDir, 'python-userbase'), {
+    recursive: true,
+  });
+  fs.mkdirSync(path.join(groupSessionsDir, 'npm-global', 'bin'), {
+    recursive: true,
+  });
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   {
     // Read existing settings (preserves user-added keys like plugins)
@@ -146,6 +154,12 @@ function buildVolumeMounts(
 
     const model = profile?.model || OPENAI_MODEL || 'gpt-5.4';
     env.OPENAI_MODEL = model;
+    env.PYTHONUSERBASE = pythonUserBase;
+    env.PIP_DISABLE_PIP_VERSION_CHECK = '1';
+    env.NPM_CONFIG_PREFIX = npmPrefix;
+    env.PATH =
+      `${npmPrefix}/bin:${pythonUserBase}/bin:` +
+      (env.PATH || process.env.PATH || '');
     delete env.ANTHROPIC_MODEL;
     delete env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
     delete env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD;
