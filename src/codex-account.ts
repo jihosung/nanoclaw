@@ -282,7 +282,9 @@ function formatWindowDuration(windowDurationMins?: number): string | null {
   return `${windowDurationMins}m`;
 }
 
-function getEntries(response: RateLimitsResponse): Array<[string, RateLimitEntry]> {
+function getEntries(
+  response: RateLimitsResponse,
+): Array<[string, RateLimitEntry]> {
   if (response.rateLimitsByLimitId) {
     return Object.entries(response.rateLimitsByLimitId);
   }

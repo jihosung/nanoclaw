@@ -119,7 +119,12 @@ function buildVolumeMounts(
   }
 
   // Per-group agent settings directory (isolated from other groups)
-  const groupSessionsDir = path.join(DATA_DIR, 'sessions', group.folder, '.agent');
+  const groupSessionsDir = path.join(
+    DATA_DIR,
+    'sessions',
+    group.folder,
+    '.agent',
+  );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   {
@@ -340,9 +345,7 @@ export async function runContainerAgent(
       group: group.name,
       containerName,
       brain: group.agentProfile?.brain ?? 'codex',
-      model:
-        group.agentProfile?.model ||
-        (OPENAI_MODEL || 'gpt-5.4'),
+      model: group.agentProfile?.model || OPENAI_MODEL || 'gpt-5.4',
       mountCount: mounts.length,
       isMain: input.isMain,
     },

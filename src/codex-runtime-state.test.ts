@@ -64,9 +64,7 @@ describe('codex runtime state', () => {
     });
 
     expect(getPreferredCodexModel('dc:1', 'gpt-5.4')).toBe('gpt-5.4');
-    expect(getPreferredAvailableModels('dc:1')).toBe(
-      'gpt-5.4, gpt-5.4-mini',
-    );
+    expect(getPreferredAvailableModels('dc:1')).toBe('gpt-5.4, gpt-5.4-mini');
   });
 
   it('reads available models from the codex cache file', () => {

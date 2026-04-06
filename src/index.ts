@@ -632,7 +632,6 @@ async function main(): Promise<void> {
     ensureOneCLIAgent(jid, group);
   }
 
-
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
