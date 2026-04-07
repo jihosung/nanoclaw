@@ -750,9 +750,9 @@ describe('DiscordChannel', () => {
       expect(payload.files).toHaveLength(1);
       expect(payload.files[0].name).toBe('plot.png');
       expect(Buffer.isBuffer(payload.files[0].attachment)).toBe(true);
-      expect(payload.files[0].attachment.equals(fs.readFileSync(hostFile))).toBe(
-        true,
-      );
+      expect(
+        payload.files[0].attachment.equals(fs.readFileSync(hostFile)),
+      ).toBe(true);
     });
 
     it('rejects attachments outside the group workspace', async () => {
@@ -802,9 +802,9 @@ describe('DiscordChannel', () => {
       expect(payload.files).toHaveLength(1);
       expect(payload.files[0].name).toBe('weekly-report.pdf');
       expect(Buffer.isBuffer(payload.files[0].attachment)).toBe(true);
-      expect(payload.files[0].attachment.equals(fs.readFileSync(hostFile))).toBe(
-        true,
-      );
+      expect(
+        payload.files[0].attachment.equals(fs.readFileSync(hostFile)),
+      ).toBe(true);
     });
   });
 

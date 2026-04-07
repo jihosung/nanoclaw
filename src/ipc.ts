@@ -11,7 +11,10 @@ import { logger } from './logger.js';
 import { OutboundMessage, RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
-  sendMessage: (jid: string, message: string | OutboundMessage) => Promise<void>;
+  sendMessage: (
+    jid: string,
+    message: string | OutboundMessage,
+  ) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -128,9 +131,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   });
                   await deps.sendMessage(data.chatJid, {
                     text: hasText ? data.text : undefined,
-                    attachments: hasAttachments
-                      ? data.attachments
-                      : undefined,
+                    attachments: hasAttachments ? data.attachments : undefined,
                   });
                   appendIpcTrace(sourceGroup, 'dispatch-success', {
                     chatJid: data.chatJid,

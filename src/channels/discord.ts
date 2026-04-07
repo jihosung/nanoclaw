@@ -256,7 +256,10 @@ export class DiscordChannel implements Channel {
           firstChunkLength: firstChunk?.length ?? 0,
         });
       } else if (chunks.length === 0) {
-        logger.warn({ jid }, 'Discord message had no text or valid attachments');
+        logger.warn(
+          { jid },
+          'Discord message had no text or valid attachments',
+        );
         this.appendDeliveryTrace(jid, 'dropped-empty', {});
         return;
       }
@@ -376,7 +379,10 @@ export class DiscordChannel implements Channel {
 
     const group = this.opts.registeredGroups()[jid];
     if (!group) {
-      logger.warn({ jid }, 'Cannot resolve attachments without registered group');
+      logger.warn(
+        { jid },
+        'Cannot resolve attachments without registered group',
+      );
       return [];
     }
 
@@ -491,10 +497,7 @@ function resolveAttachmentPath(
 
   const hostPath = path.resolve(groupDir, relativePath);
   const relativeToGroup = path.relative(groupDir, hostPath);
-  if (
-    relativeToGroup.startsWith('..') ||
-    path.isAbsolute(relativeToGroup)
-  ) {
+  if (relativeToGroup.startsWith('..') || path.isAbsolute(relativeToGroup)) {
     return null;
   }
 
