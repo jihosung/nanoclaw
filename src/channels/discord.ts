@@ -1,4 +1,8 @@
+import fs from 'fs';
+import path from 'path';
+
 import {
+  AttachmentBuilder,
   Client,
   Events,
   GatewayIntentBits,
@@ -8,12 +12,15 @@ import {
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
+import { resolveGroupFolderPath } from '../group-folder.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
   OnChatMetadata,
   OnInboundMessage,
+  OutboundAttachment,
+  OutboundMessage,
   RegisteredGroup,
 } from '../types.js';
 
@@ -73,7 +80,7 @@ export class DiscordChannel implements Channel {
       }
 
       // Translate Discord @bot mentions into TRIGGER_PATTERN format.
-      // Discord mentions look like <@botUserId> — these won't match
+      // Discord mentions look like <@botUserId> -- these won't match
       // TRIGGER_PATTERN (e.g., ^@Andy\b), so we prepend the trigger
       // when the bot is @mentioned.
       if (this.client?.user) {
@@ -95,7 +102,7 @@ export class DiscordChannel implements Channel {
         }
       }
 
-      // Handle attachments — store placeholders so the agent knows something was sent
+      // Handle attachments -- store placeholders so the agent knows something was sent
       if (message.attachments.size > 0) {
         const attachmentDescriptions = [...message.attachments.values()].map(
           (att) => {
@@ -119,7 +126,7 @@ export class DiscordChannel implements Channel {
         }
       }
 
-      // Handle reply context — include who the user is replying to
+      // Handle reply context -- include who the user is replying to
       if (message.reference?.messageId) {
         try {
           const repliedTo = await message.channel.messages.fetch(
@@ -155,7 +162,7 @@ export class DiscordChannel implements Channel {
         return;
       }
 
-      // Deliver message — startMessageLoop() will pick it up
+      // Deliver message -- startMessageLoop() will pick it up
       await this.opts.onMessage(chatJid, {
         id: msgId,
         chat_jid: chatJid,
@@ -194,7 +201,10 @@ export class DiscordChannel implements Channel {
     });
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  async sendMessage(
+    jid: string,
+    message: string | OutboundMessage,
+  ): Promise<void> {
     if (!this.client) {
       logger.warn('Discord client not initialized');
       return;
@@ -210,19 +220,90 @@ export class DiscordChannel implements Channel {
       }
 
       const textChannel = channel as TextChannel;
+      const outbound = normalizeOutboundMessage(message);
+      this.appendDeliveryTrace(jid, 'prepare', {
+        textLength: outbound.text?.length ?? 0,
+        requestedAttachments: outbound.attachments?.length ?? 0,
+      });
+      const files = this.resolveAttachments(jid, outbound.attachments);
+      this.appendDeliveryTrace(jid, 'resolved', {
+        resolvedAttachments: files.length,
+      });
+      const chunks =
+        outbound.text && outbound.text.length > 0
+          ? splitMessage(outbound.text, 2000)
+          : [];
 
-      // Discord has a 2000 character limit per message — split if needed
-      const MAX_LENGTH = 2000;
-      if (text.length <= MAX_LENGTH) {
-        await textChannel.send(text);
-      } else {
-        for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await textChannel.send(text.slice(i, i + MAX_LENGTH));
+      if (
+        outbound.attachments &&
+        outbound.attachments.length > 0 &&
+        files.length === 0
+      ) {
+        const errorText =
+          'Failed to send attachment(s): no valid files were found in the current group workspace.';
+        if (chunks.length > 0) {
+          chunks[0] = `${chunks[0]}\n\n${errorText}`;
+        } else {
+          chunks.push(errorText);
         }
       }
-      logger.info({ jid, length: text.length }, 'Discord message sent');
+
+      if (files.length > 0) {
+        const firstChunk = chunks.shift();
+        await textChannel.send({ content: firstChunk, files });
+        this.appendDeliveryTrace(jid, 'sent-with-attachments', {
+          files: files.length,
+          firstChunkLength: firstChunk?.length ?? 0,
+        });
+      } else if (chunks.length === 0) {
+        logger.warn(
+          { jid },
+          'Discord message had no text or valid attachments',
+        );
+        this.appendDeliveryTrace(jid, 'dropped-empty', {});
+        return;
+      }
+
+      for (const chunk of chunks) {
+        await textChannel.send(chunk);
+      }
+      if (chunks.length > 0) {
+        this.appendDeliveryTrace(jid, 'sent-text-chunks', {
+          chunks: chunks.length,
+        });
+      }
+
+      logger.info(
+        {
+          jid,
+          length: outbound.text?.length ?? 0,
+          attachmentCount: files.length,
+        },
+        'Discord message sent',
+      );
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Discord message');
+      this.appendDeliveryTrace(jid, 'send-error', {
+        error: formatDiscordSendError(err),
+      });
+      try {
+        const channelId = jid.replace(/^dc:/, '');
+        const channel = await this.client.channels.fetch(channelId);
+        if (channel && 'send' in channel) {
+          await (channel as TextChannel).send(
+            `Failed to send Discord attachment/message: ${formatDiscordSendError(err)}`,
+          );
+          this.appendDeliveryTrace(jid, 'fallback-sent', {});
+        }
+      } catch (fallbackErr) {
+        logger.error(
+          { jid, err: fallbackErr },
+          'Failed to send Discord error fallback message',
+        );
+        this.appendDeliveryTrace(jid, 'fallback-error', {
+          error: formatDiscordSendError(fallbackErr),
+        });
+      }
     }
   }
 
@@ -289,6 +370,146 @@ export class DiscordChannel implements Channel {
     const interval = setInterval(sendTyping, 8000);
     this.typingIntervals.set(jid, interval);
   }
+
+  private resolveAttachments(
+    jid: string,
+    attachments: OutboundAttachment[] | undefined,
+  ): AttachmentBuilder[] {
+    if (!attachments || attachments.length === 0) return [];
+
+    const group = this.opts.registeredGroups()[jid];
+    if (!group) {
+      logger.warn(
+        { jid },
+        'Cannot resolve attachments without registered group',
+      );
+      return [];
+    }
+
+    const groupDir = path.resolve(resolveGroupFolderPath(group.folder));
+    return attachments.flatMap((attachment) => {
+      const hostPath = resolveAttachmentPath(attachment.path, groupDir);
+      if (!hostPath) {
+        logger.warn(
+          { jid, path: attachment.path },
+          'Rejected Discord attachment outside group workspace',
+        );
+        this.appendDeliveryTrace(jid, 'attachment-rejected', {
+          path: attachment.path,
+          reason: 'outside-group-workspace',
+        });
+        return [];
+      }
+      if (!fs.existsSync(hostPath) || !fs.statSync(hostPath).isFile()) {
+        logger.warn(
+          { jid, path: attachment.path, hostPath },
+          'Discord attachment file not found',
+        );
+        this.appendDeliveryTrace(jid, 'attachment-missing', {
+          path: attachment.path,
+          hostPath,
+        });
+        return [];
+      }
+
+      try {
+        return [
+          new AttachmentBuilder(fs.readFileSync(hostPath), {
+            name: attachment.name || path.basename(hostPath),
+          }),
+        ];
+      } catch (err) {
+        logger.warn(
+          { jid, path: attachment.path, hostPath, err },
+          'Failed to read Discord attachment file',
+        );
+        this.appendDeliveryTrace(jid, 'attachment-read-error', {
+          path: attachment.path,
+          hostPath,
+          error: formatDiscordSendError(err),
+        });
+        return [];
+      }
+    });
+  }
+
+  private appendDeliveryTrace(
+    jid: string,
+    stage: string,
+    details: Record<string, unknown>,
+  ): void {
+    try {
+      const group = this.opts.registeredGroups()[jid];
+      if (!group) return;
+      const logDir = path.join(resolveGroupFolderPath(group.folder), 'logs');
+      fs.mkdirSync(logDir, { recursive: true });
+      const logPath = path.join(logDir, 'discord-delivery.log');
+      const line = JSON.stringify({
+        timestamp: new Date().toISOString(),
+        jid,
+        stage,
+        ...details,
+      });
+      fs.appendFileSync(logPath, `${line}\n`);
+    } catch {
+      // never fail message delivery because of debug logging
+    }
+  }
+}
+
+function normalizeOutboundMessage(
+  message: string | OutboundMessage,
+): OutboundMessage {
+  if (typeof message === 'string') {
+    return { text: message };
+  }
+  return message;
+}
+
+function splitMessage(text: string, maxLength: number): string[] {
+  if (text.length <= maxLength) return [text];
+
+  const chunks: string[] = [];
+  for (let i = 0; i < text.length; i += maxLength) {
+    chunks.push(text.slice(i, i + maxLength));
+  }
+  return chunks;
+}
+
+function resolveAttachmentPath(
+  attachmentPath: string,
+  groupDir: string,
+): string | null {
+  const normalized = attachmentPath.replace(/\\/g, '/');
+  let relativePath: string;
+
+  if (normalized === '/workspace/group') {
+    return null;
+  }
+
+  if (normalized.startsWith('/workspace/group/')) {
+    relativePath = path.posix.relative('/workspace/group', normalized);
+  } else if (path.isAbsolute(attachmentPath)) {
+    return null;
+  } else {
+    relativePath = attachmentPath;
+  }
+
+  const hostPath = path.resolve(groupDir, relativePath);
+  const relativeToGroup = path.relative(groupDir, hostPath);
+  if (relativeToGroup.startsWith('..') || path.isAbsolute(relativeToGroup)) {
+    return null;
+  }
+
+  return hostPath;
+}
+
+function formatDiscordSendError(err: unknown): string {
+  if (err instanceof Error) {
+    const message = err.message?.trim();
+    return message.length > 0 ? message : err.constructor.name;
+  }
+  return String(err);
 }
 
 registerChannel('discord', (opts: ChannelOpts) => {

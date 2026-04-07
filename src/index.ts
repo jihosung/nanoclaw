@@ -62,7 +62,12 @@ import {
   shouldDropMessage,
 } from './sender-allowlist.js';
 import { startSchedulerLoop } from './task-scheduler.js';
-import { Channel, NewMessage, RegisteredGroup } from './types.js';
+import {
+  Channel,
+  NewMessage,
+  OutboundMessage,
+  RegisteredGroup,
+} from './types.js';
 import { logger } from './logger.js';
 import { extractCommand, handleSessionCommand } from './session-commands.js';
 
@@ -741,10 +746,10 @@ async function main(): Promise<void> {
     },
   });
   startIpcWatcher({
-    sendMessage: (jid, text) => {
+    sendMessage: (jid, message: string | OutboundMessage) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      return channel.sendMessage(jid, text);
+      return channel.sendMessage(jid, message);
     },
     registeredGroups: () => registeredGroups,
     registerGroup,

@@ -15,10 +15,19 @@ const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 
-// Context from environment variables (set by the agent runner)
-const chatJid = process.env.NANOCLAW_CHAT_JID!;
-const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
-const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+function readArg(name: string): string | undefined {
+  const idx = process.argv.indexOf(name);
+  if (idx === -1) return undefined;
+  return process.argv[idx + 1];
+}
+
+// Context comes from argv first, env as fallback.
+// app-server-launched MCP processes may not always inherit custom env vars.
+const chatJid = readArg('--chat-jid') || process.env.NANOCLAW_CHAT_JID;
+const groupFolder =
+  readArg('--group-folder') || process.env.NANOCLAW_GROUP_FOLDER;
+const isMainRaw = readArg('--is-main') || process.env.NANOCLAW_IS_MAIN;
+const isMain = isMainRaw === '1';
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -43,7 +52,28 @@ server.tool(
   'send_message',
   "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times.",
   {
-    text: z.string().describe('The message text to send'),
+    text: z
+      .string()
+      .optional()
+      .describe('Optional message text to send alongside any attachments'),
+    attachments: z
+      .array(
+        z.object({
+          path: z
+            .string()
+            .describe(
+              'Container-local file path to attach. Use files inside /workspace/group.',
+            ),
+          name: z
+            .string()
+            .optional()
+            .describe('Optional filename override shown in the chat client'),
+        }),
+      )
+      .optional()
+      .describe(
+        'Optional files to attach. Only files in the current group workspace are supported.',
+      ),
     sender: z
       .string()
       .optional()
@@ -52,6 +82,30 @@ server.tool(
       ),
   },
   async (args) => {
+    if (!chatJid || !groupFolder || !isMainRaw) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'nanoclaw MCP context is missing (chat/group).',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    if (!args.text && (!args.attachments || args.attachments.length === 0)) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'send_message requires text, attachments, or both.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
     const data: Record<string, string | undefined> = {
       type: 'message',
       chatJid,
@@ -60,6 +114,9 @@ server.tool(
       groupFolder,
       timestamp: new Date().toISOString(),
     };
+    if (args.attachments && args.attachments.length > 0) {
+      (data as Record<string, unknown>).attachments = args.attachments;
+    }
 
     writeIpcFile(MESSAGES_DIR, data);
 

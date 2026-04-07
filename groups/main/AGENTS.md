@@ -23,6 +23,8 @@ You can fetch these URLs with `WebFetch` or `agent-browser` to read or analyze t
 
 **Important limitation:** Discord CDN URLs expire within ~24 hours of being sent. URLs stored in conversation history or memory files will become inaccessible after expiry. Do not store Discord CDN URLs for long-term reference ??download and save the content to your workspace if you need it later.
 
+To send a file back to the chat, call `mcp__nanoclaw__send_message` with `attachments` and pass the file's existing container-local path, such as `/workspace/group/report.pdf`. If the file is already inside `/workspace/group/`, do not move it first. Files outside the current group workspace are rejected by the host.
+
 ## Translation
 
 When a message begins with `[Translator active:]`, the user is communicating through an automatic translator. **Always respond in English** ??your response will be automatically translated back to the user's language before delivery. Do not respond in the user's language directly; respond in English only.
@@ -32,6 +34,8 @@ When a message begins with `[Translator active:]`, the user is communicating thr
 Your output is sent to the user or group.
 
 You also have `mcp__nanoclaw__send_message` which sends a message immediately while you're still working. This is useful when you want to acknowledge a request before starting longer work.
+
+When you send a file via `mcp__nanoclaw__send_message` with `attachments`, stop there. Do not send an extra follow-up text like "sent" or "uploaded" unless the user explicitly asked for a separate confirmation message.
 
 ### Internal thoughts
 

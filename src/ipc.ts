@@ -6,12 +6,15 @@ import { CronExpressionParser } from 'cron-parser';
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
-import { isValidGroupFolder } from './group-folder.js';
+import { isValidGroupFolder, resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
-import { RegisteredGroup } from './types.js';
+import { OutboundMessage, RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
-  sendMessage: (jid: string, text: string) => Promise<void>;
+  sendMessage: (
+    jid: string,
+    message: string | OutboundMessage,
+  ) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -26,6 +29,26 @@ export interface IpcDeps {
 }
 
 let ipcWatcherRunning = false;
+
+function appendIpcTrace(
+  groupFolder: string,
+  stage: string,
+  details: Record<string, unknown>,
+): void {
+  try {
+    const logDir = path.join(resolveGroupFolderPath(groupFolder), 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    const logPath = path.join(logDir, 'ipc-delivery.log');
+    const line = JSON.stringify({
+      timestamp: new Date().toISOString(),
+      stage,
+      ...details,
+    });
+    fs.appendFileSync(logPath, `${line}\n`);
+  } catch {
+    // Never fail IPC processing because tracing failed.
+  }
+}
 
 export function startIpcWatcher(deps: IpcDeps): void {
   if (ipcWatcherRunning) {
@@ -73,28 +96,74 @@ export function startIpcWatcher(deps: IpcDeps): void {
           for (const file of messageFiles) {
             const filePath = path.join(messagesDir, file);
             try {
-              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              if (data.type === 'message' && data.chatJid && data.text) {
+              const raw = fs.readFileSync(filePath, 'utf-8');
+              const data = JSON.parse(raw);
+              const hasText =
+                typeof data.text === 'string' && data.text.trim().length > 0;
+              const hasAttachments =
+                Array.isArray(data.attachments) && data.attachments.length > 0;
+              appendIpcTrace(sourceGroup, 'read-message-file', {
+                file,
+                chatJid: data.chatJid,
+                hasText,
+                textLength:
+                  typeof data.text === 'string' ? data.text.length : 0,
+                hasAttachments,
+                attachmentCount: Array.isArray(data.attachments)
+                  ? data.attachments.length
+                  : 0,
+              });
+              if (
+                data.type === 'message' &&
+                data.chatJid &&
+                (hasText || hasAttachments)
+              ) {
                 // Authorization: verify this group can send to this chatJid
                 const targetGroup = registeredGroups[data.chatJid];
                 if (
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
-                  await deps.sendMessage(data.chatJid, data.text);
+                  appendIpcTrace(sourceGroup, 'dispatch-send', {
+                    chatJid: data.chatJid,
+                    hasText,
+                    hasAttachments,
+                  });
+                  await deps.sendMessage(data.chatJid, {
+                    text: hasText ? data.text : undefined,
+                    attachments: hasAttachments ? data.attachments : undefined,
+                  });
+                  appendIpcTrace(sourceGroup, 'dispatch-success', {
+                    chatJid: data.chatJid,
+                    hasAttachments,
+                  });
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },
                     'IPC message sent',
                   );
                 } else {
+                  appendIpcTrace(sourceGroup, 'dispatch-blocked', {
+                    chatJid: data.chatJid,
+                  });
                   logger.warn(
                     { chatJid: data.chatJid, sourceGroup },
                     'Unauthorized IPC message attempt blocked',
                   );
                 }
+              } else if (data.type === 'message') {
+                appendIpcTrace(sourceGroup, 'invalid-message-payload', {
+                  file,
+                  hasChatJid: Boolean(data.chatJid),
+                  hasText,
+                  hasAttachments,
+                });
               }
               fs.unlinkSync(filePath);
             } catch (err) {
+              appendIpcTrace(sourceGroup, 'dispatch-error', {
+                file,
+                error: err instanceof Error ? err.message : String(err),
+              });
               logger.error(
                 { file, sourceGroup, err },
                 'Error processing IPC message',

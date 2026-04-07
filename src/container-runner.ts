@@ -63,13 +63,13 @@ interface VolumeMount {
 
 function buildVolumeMounts(
   group: RegisteredGroup,
-  isMain: boolean,
+  input: Pick<ContainerInput, 'chatJid' | 'isMain'>,
 ): VolumeMount[] {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
   const groupDir = resolveGroupFolderPath(group.folder);
 
-  if (isMain) {
+  if (input.isMain) {
     // Main gets the project root read-only. Writable paths the agent needs
     // (group folder, IPC, per-group settings) are mounted separately below.
     // Read-only prevents the agent from modifying host application code
@@ -154,6 +154,9 @@ function buildVolumeMounts(
 
     const model = profile?.model || OPENAI_MODEL || 'gpt-5.4';
     env.OPENAI_MODEL = model;
+    env.NANOCLAW_CHAT_JID = input.chatJid;
+    env.NANOCLAW_GROUP_FOLDER = group.folder;
+    env.NANOCLAW_IS_MAIN = input.isMain ? '1' : '0';
     env.PYTHONUSERBASE = pythonUserBase;
     env.PIP_DISABLE_PIP_VERSION_CHECK = '1';
     env.NPM_CONFIG_PREFIX = npmPrefix;
@@ -258,7 +261,7 @@ function buildVolumeMounts(
     const validatedMounts = validateAdditionalMounts(
       group.containerConfig.additionalMounts,
       group.name,
-      isMain,
+      input.isMain,
     );
     mounts.push(...validatedMounts);
   }
@@ -328,7 +331,10 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const mounts = buildVolumeMounts(group, {
+    chatJid: input.chatJid,
+    isMain: input.isMain,
+  });
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   // Main group uses the default OneCLI agent; others use their own agent.
