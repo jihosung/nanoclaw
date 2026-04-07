@@ -9,9 +9,13 @@ const STEPS: Record<
   string,
   () => Promise<{ run: (args: string[]) => Promise<void> }>
 > = {
+  git: () => import('./git.js'),
+  bootstrap: () => import('./bootstrap.js'),
   timezone: () => import('./timezone.js'),
   environment: () => import('./environment.js'),
   container: () => import('./container.js'),
+  credentials: () => import('./credentials.js'),
+  discord: () => import('./discord.js'),
   groups: () => import('./groups.js'),
   register: () => import('./register.js'),
   mounts: () => import('./mounts.js'),
