@@ -1,3 +1,7 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
 // --- Mocks ---
@@ -29,6 +33,11 @@ vi.mock('../logger.js', () => ({
 type Handler = (...args: any[]) => any;
 
 const clientRef = vi.hoisted(() => ({ current: null as any }));
+const groupDirRef = vi.hoisted(() => ({ current: '' }));
+
+vi.mock('../group-folder.js', () => ({
+  resolveGroupFolderPath: vi.fn(() => groupDirRef.current),
+}));
 
 vi.mock('discord.js', () => {
   const Events = {
@@ -92,7 +101,18 @@ vi.mock('discord.js', () => {
   // Mock TextChannel type
   class TextChannel {}
 
+  class AttachmentBuilder {
+    attachment: any;
+    name?: string;
+
+    constructor(attachment: any, data?: { name?: string }) {
+      this.attachment = attachment;
+      this.name = data?.name;
+    }
+  }
+
   return {
+    AttachmentBuilder,
     Client: MockClient,
     Events,
     GatewayIntentBits,
@@ -193,6 +213,9 @@ async function triggerMessage(message: any) {
 describe('DiscordChannel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    groupDirRef.current = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'nanoclaw-discord-test-'),
+    );
   });
 
   afterEach(() => {
@@ -698,6 +721,90 @@ describe('DiscordChannel', () => {
       expect(mockChannel.send).toHaveBeenCalledTimes(2);
       expect(mockChannel.send).toHaveBeenNthCalledWith(1, 'x'.repeat(2000));
       expect(mockChannel.send).toHaveBeenNthCalledWith(2, 'x'.repeat(1000));
+    });
+
+    it('uploads attachments from the group workspace', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      const hostFile = path.join(groupDirRef.current, 'plot.png');
+      fs.writeFileSync(hostFile, 'png');
+
+      const mockChannel = {
+        send: vi.fn().mockResolvedValue(undefined),
+        sendTyping: vi.fn(),
+      };
+      currentClient().channels.fetch.mockResolvedValue(mockChannel);
+
+      await channel.sendMessage('dc:1234567890123456', {
+        text: 'Here is the chart',
+        attachments: [{ path: '/workspace/group/plot.png' }],
+      });
+
+      const payload = mockChannel.send.mock.calls[0][0];
+      expect(mockChannel.send).toHaveBeenCalledWith({
+        content: 'Here is the chart',
+        files: expect.any(Array),
+      });
+      expect(payload.files).toHaveLength(1);
+      expect(payload.files[0].name).toBe('plot.png');
+      expect(Buffer.isBuffer(payload.files[0].attachment)).toBe(true);
+      expect(payload.files[0].attachment.equals(fs.readFileSync(hostFile))).toBe(
+        true,
+      );
+    });
+
+    it('rejects attachments outside the group workspace', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      const mockChannel = {
+        send: vi.fn().mockResolvedValue(undefined),
+        sendTyping: vi.fn(),
+      };
+      currentClient().channels.fetch.mockResolvedValue(mockChannel);
+
+      await channel.sendMessage('dc:1234567890123456', {
+        text: 'No file',
+        attachments: [{ path: '../secret.txt' }],
+      });
+
+      expect(mockChannel.send).toHaveBeenCalledWith('No file');
+    });
+
+    it('sends attachment-only messages', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      const hostFile = path.join(groupDirRef.current, 'report.pdf');
+      fs.writeFileSync(hostFile, 'pdf');
+
+      const mockChannel = {
+        send: vi.fn().mockResolvedValue(undefined),
+        sendTyping: vi.fn(),
+      };
+      currentClient().channels.fetch.mockResolvedValue(mockChannel);
+
+      await channel.sendMessage('dc:1234567890123456', {
+        attachments: [
+          { path: '/workspace/group/report.pdf', name: 'weekly-report.pdf' },
+        ],
+      });
+
+      const payload = mockChannel.send.mock.calls[0][0];
+      expect(mockChannel.send).toHaveBeenCalledWith({
+        content: undefined,
+        files: expect.any(Array),
+      });
+      expect(payload.files).toHaveLength(1);
+      expect(payload.files[0].name).toBe('weekly-report.pdf');
+      expect(Buffer.isBuffer(payload.files[0].attachment)).toBe(true);
+      expect(payload.files[0].attachment.equals(fs.readFileSync(hostFile))).toBe(
+        true,
+      );
     });
   });
 

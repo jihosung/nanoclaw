@@ -93,11 +93,32 @@ export class CodexAppServerClient {
     // @openai/codex is installed globally in the container image (npm install -g).
     // Spawn the `codex` binary from PATH rather than resolving via require(),
     // which only searches local node_modules and would fail here.
-    this.proc = spawn('codex', ['app-server'], {
+    const mcpArgs = ['/tmp/dist/ipc-mcp-stdio.js'];
+    if (this.env.NANOCLAW_CHAT_JID) {
+      mcpArgs.push('--chat-jid', this.env.NANOCLAW_CHAT_JID);
+    }
+    if (this.env.NANOCLAW_GROUP_FOLDER) {
+      mcpArgs.push('--group-folder', this.env.NANOCLAW_GROUP_FOLDER);
+    }
+    if (this.env.NANOCLAW_IS_MAIN) {
+      mcpArgs.push('--is-main', this.env.NANOCLAW_IS_MAIN);
+    }
+
+    this.proc = spawn(
+      'codex',
+      [
+        '-c',
+        'mcp_servers.nanoclaw.command="node"',
+        '-c',
+        `mcp_servers.nanoclaw.args=${JSON.stringify(mcpArgs)}`,
+        'app-server',
+      ],
+      {
       cwd: this.cwd,
       env: this.env,
       stdio: ['pipe', 'pipe', 'pipe'],
-    });
+      },
+    );
 
     this.proc.stdout.setEncoding('utf8');
     this.proc.stdout.on('data', (chunk: string) => {

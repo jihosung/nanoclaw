@@ -102,10 +102,20 @@ export interface TaskRunLog {
 
 // --- Channel abstraction ---
 
+export interface OutboundAttachment {
+  path: string;
+  name?: string;
+}
+
+export interface OutboundMessage {
+  text?: string;
+  attachments?: OutboundAttachment[];
+}
+
 export interface Channel {
   name: string;
   connect(): Promise<void>;
-  sendMessage(jid: string, text: string): Promise<void>;
+  sendMessage(jid: string, message: string | OutboundMessage): Promise<void>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;
