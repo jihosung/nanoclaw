@@ -237,7 +237,9 @@ export async function handleSessionCommand(
   }
 }
 
-function parseSetupCodexArgs(args: string):
+function parseSetupCodexArgs(
+  args: string,
+):
   | { mode: 'help' }
   | { mode: 'status' }
   | { mode: 'run'; step: SetupStep; extraArgs: string[] } {
@@ -312,7 +314,9 @@ function parseSetupStatusBlock(text: string): Record<string, string> {
     line.startsWith('=== NANOCLAW SETUP:'),
   );
   if (start === -1) return {};
-  const end = lines.findIndex((line, idx) => idx > start && line === '=== END ===');
+  const end = lines.findIndex(
+    (line, idx) => idx > start && line === '=== END ===',
+  );
   if (end === -1) return {};
 
   const fields: Record<string, string> = {};
