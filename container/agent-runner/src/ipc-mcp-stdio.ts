@@ -563,6 +563,50 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 );
 
 server.tool(
+  'unregister_group',
+  `Unregister a chat/group so the agent no longer responds there. Main group only.
+
+This removes the group from active registration. It does not delete the group folder on disk.`,
+  {
+    jid: z
+      .string()
+      .describe(
+        'The chat JID to unregister (e.g., "120363336345536173@g.us", "tg:-1001234567890", "dc:1234567890123456")',
+      ),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main group can unregister groups.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'unregister_group',
+      jid: args.jid,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Unregister requested for ${args.jid}.`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
   'restart_host',
   'Restart the NanoClaw host process. Main group only. Use for admin operations like applying configuration changes.',
   {

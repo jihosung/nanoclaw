@@ -78,12 +78,13 @@ Fields:
 2. Use the `register_group` MCP tool with JID, name, folder, trigger, and optional `requiresTrigger` (set `false` for always-on channels).
 3. Optionally include `containerConfig` for additional mounts.
 4. The group folder is created automatically: `/workspace/project/groups/{folder-name}/`.
-5. For non-main groups, keep that group's `AGENTS.md` channel-specific and lightweight:
-   - Treat `/workspace/global/AGENTS.md` as the global baseline reference.
+5. Keep each channel's `AGENTS.md` channel-specific and lightweight:
+   - Main channels: treat `/workspace/project/groups/main/AGENTS.md` as baseline.
+   - Non-main channels: treat `/workspace/global/AGENTS.md` as baseline.
    - Put channel-specific behavior only in `/workspace/project/groups/<folder>/AGENTS.md`.
    - Start custom channel sections as placeholders and fill them only when the user asks.
 
-Recommended initial block for non-main group AGENTS:
+Recommended initial block for non-main channel AGENTS:
 
 ```md
 ## Global Baseline
@@ -91,6 +92,16 @@ Follow `/workspace/global/AGENTS.md` for shared defaults.
 
 ## Channel-Specific Overrides
 <!-- Add channel-specific rules here only when requested. -->
+```
+
+Recommended initial block for main channel AGENTS:
+
+```md
+## Main Baseline
+Follow `/workspace/project/groups/main/AGENTS.md` for shared defaults.
+
+## Main-Channel-Specific Overrides
+<!-- Add main-channel-specific rules here only when requested. -->
 ```
 
 Folder naming convention (channel prefix with underscore separator):
@@ -160,10 +171,10 @@ Notes:
 
 ## Removing a Group
 
-1. Read `/workspace/project/data/registered_groups.json`.
-2. Remove the entry for that group.
-3. Write the updated JSON back.
-4. The group folder and its files remain (do not delete them).
+Use the `unregister_group` MCP tool with the target JID.
+
+- This removes the group from active registration.
+- It does not delete the group folder on disk.
 
 ## Listing Groups
 

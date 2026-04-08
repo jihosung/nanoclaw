@@ -38,6 +38,7 @@ import {
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
+  deleteRegisteredGroup,
   deleteSession,
   getAllTasks,
   getLastBotMessageTimestamp,
@@ -188,48 +189,30 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   // Create group folder
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
 
-  // Seed AGENTS.md for new groups:
-  // - main group keeps full main template
-  // - non-main groups start with a lightweight stub that references
-  //   the global baseline and leaves room for channel-specific overrides
+  // Seed AGENTS.md for new groups using baseline-reference stubs.
+  // main references /workspace/project/groups/main/AGENTS.md.
+  // non-main references /workspace/global/AGENTS.md.
   const groupMdFile = path.join(groupDir, 'AGENTS.md');
   if (!fs.existsSync(groupMdFile)) {
     if (group.isMain) {
-      const mainTemplateDir = path.join(GROUPS_DIR, 'main');
-      const templateFile = path.join(mainTemplateDir, 'AGENTS.md');
-      if (fs.existsSync(templateFile)) {
-        let content = fs.readFileSync(templateFile, 'utf-8');
-        if (ASSISTANT_NAME !== 'Andy') {
-          content = content.replace(/^# Andy$/m, `# ${ASSISTANT_NAME}`);
-          content = content.replace(
-            /You are Andy/g,
-            `You are ${ASSISTANT_NAME}`,
-          );
-        }
-        fs.writeFileSync(groupMdFile, content);
-        logger.info(
-          { folder: group.folder },
-          'Created main AGENTS.md from template',
-        );
-      }
-
-      const templateDocsDir = path.join(mainTemplateDir, 'docs');
-      const targetDocsDir = path.join(groupDir, 'docs');
-      if (fs.existsSync(templateDocsDir)) {
-        fs.mkdirSync(targetDocsDir, { recursive: true });
-        for (const entry of fs.readdirSync(templateDocsDir, { withFileTypes: true })) {
-          if (!entry.isFile()) continue;
-          if (!entry.name.toLowerCase().endsWith('.md')) continue;
-          const srcFile = path.join(templateDocsDir, entry.name);
-          const dstFile = path.join(targetDocsDir, entry.name);
-          if (!fs.existsSync(dstFile)) {
-            fs.copyFileSync(srcFile, dstFile);
-          }
-        }
-      }
-    } else {
       const stub = [
         `# ${ASSISTANT_NAME}`,
+        ``,
+        `This channel follows the main baseline instructions at:`,
+        `- /workspace/project/groups/main/AGENTS.md`,
+        ``,
+        `## Main-Channel-Specific Overrides`,
+        `<!-- Add main-channel-specific rules here only when requested. -->`,
+        ``,
+      ].join('\n');
+      fs.writeFileSync(groupMdFile, stub);
+      logger.info(
+        { folder: group.folder },
+        'Created main AGENTS.md baseline stub',
+      );
+    } else {
+      const stub = [
+        `# Channel Assistant`,
         ``,
         `This channel follows the global baseline instructions at:`,
         `- /workspace/global/AGENTS.md`,
@@ -252,6 +235,34 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   logger.info(
     { jid, name: group.name, folder: group.folder },
     'Group registered',
+  );
+}
+
+function unregisterGroup(jid: string): void {
+  const existing = registeredGroups[jid];
+  if (!existing) {
+    logger.warn({ jid }, 'Unregister requested for unknown group');
+    return;
+  }
+
+  if (existing.isMain) {
+    logger.warn({ jid }, 'Refusing to unregister main group');
+    return;
+  }
+
+  queue.killProcess(jid);
+  queue.closeStdin(jid);
+
+  deleteSession(existing.folder);
+  delete sessions[existing.folder];
+  delete lastAgentTimestamp[jid];
+  delete registeredGroups[jid];
+  deleteRegisteredGroup(jid);
+  saveState();
+
+  logger.info(
+    { jid, folder: existing.folder, name: existing.name },
+    'Group unregistered',
   );
 }
 
@@ -840,6 +851,7 @@ async function main(): Promise<void> {
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
+    unregisterGroup,
     syncGroups: async (force: boolean) => {
       await Promise.all(
         channels

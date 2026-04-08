@@ -117,8 +117,7 @@ export async function run(args: string[]): Promise<void> {
   });
 
   // Create AGENTS.md in the new group folder if it doesn't exist.
-  // main uses the full main template; non-main starts with a lightweight
-  // channel-local stub that references the global baseline.
+  // Use baseline-reference stubs for both main and non-main channels.
   const groupAgentsPath = path.join(
     projectRoot,
     'groups',
@@ -127,44 +126,24 @@ export async function run(args: string[]): Promise<void> {
   );
   if (!fs.existsSync(groupAgentsPath)) {
     if (parsed.isMain) {
-      const mainTemplateDir = path.join(projectRoot, 'groups', 'main');
-      const agentsTemplatePath = path.join(
-        mainTemplateDir,
-        'AGENTS.md',
-      );
-      if (fs.existsSync(agentsTemplatePath)) {
-        let content = fs.readFileSync(agentsTemplatePath, 'utf-8');
-        if (parsed.assistantName !== 'Andy') {
-          content = content.replace(/^# Andy$/m, `# ${parsed.assistantName}`);
-          content = content.replace(
-            /You are Andy/g,
-            `You are ${parsed.assistantName}`,
-          );
-        }
-        fs.writeFileSync(groupAgentsPath, content);
-        logger.info(
-          { file: groupAgentsPath, template: agentsTemplatePath },
-          'Created AGENTS.md from main template',
-        );
-      }
-
-      const templateDocsDir = path.join(mainTemplateDir, 'docs');
-      const targetDocsDir = path.join(projectRoot, 'groups', parsed.folder, 'docs');
-      if (fs.existsSync(templateDocsDir)) {
-        fs.mkdirSync(targetDocsDir, { recursive: true });
-        for (const entry of fs.readdirSync(templateDocsDir, { withFileTypes: true })) {
-          if (!entry.isFile()) continue;
-          if (!entry.name.toLowerCase().endsWith('.md')) continue;
-          const srcFile = path.join(templateDocsDir, entry.name);
-          const dstFile = path.join(targetDocsDir, entry.name);
-          if (!fs.existsSync(dstFile)) {
-            fs.copyFileSync(srcFile, dstFile);
-          }
-        }
-      }
-    } else {
       const stub = [
         `# ${parsed.assistantName}`,
+        ``,
+        `This channel follows the main baseline instructions at:`,
+        `- /workspace/project/groups/main/AGENTS.md`,
+        ``,
+        `## Main-Channel-Specific Overrides`,
+        `<!-- Add main-channel-specific rules here only when requested. -->`,
+        ``,
+      ].join('\n');
+      fs.writeFileSync(groupAgentsPath, stub);
+      logger.info(
+        { file: groupAgentsPath },
+        'Created main AGENTS.md baseline stub',
+      );
+    } else {
+      const stub = [
+        `# Channel Assistant`,
         ``,
         `This channel follows the global baseline instructions at:`,
         `- /workspace/global/AGENTS.md`,
