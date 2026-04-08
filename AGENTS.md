@@ -58,6 +58,13 @@ npm run build        # Compile TypeScript
 ./container/build.sh # Rebuild agent container
 ```
 
+
+## Env Files
+
+- .env holds real local runtime values.
+- .env.example is a publishable template only. Do not put concrete local values in it.
+- For .env.example, keep configurable keys in KEY= form unless a comment-only example is needed.
+
 Service management:
 ```bash
 # macOS (launchd)
@@ -78,4 +85,5 @@ systemctl --user restart nanoclaw
 ## Container Build Cache
 
 The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps ??the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.
+
 

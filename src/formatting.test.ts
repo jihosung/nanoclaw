@@ -1,14 +1,17 @@
 import { describe, it, expect } from 'vitest';
 
 import {
+  RESULT_MENTION_DISCORD_USER_ID,
   ASSISTANT_NAME,
   getTriggerPattern,
   TRIGGER_PATTERN,
 } from './config.js';
 import {
   escapeXml,
+  formatFinalResultOutbound,
   formatMessages,
   formatOutbound,
+  parseNotifyUserTag,
   stripInternalTags,
 } from './router.js';
 import { NewMessage } from './types.js';
@@ -218,6 +221,79 @@ describe('TRIGGER_PATTERN', () => {
   it('matches with leading whitespace after trim', () => {
     // The actual usage trims before testing: TRIGGER_PATTERN.test(m.content.trim())
     expect(TRIGGER_PATTERN.test(`@${name} hey`.trim())).toBe(true);
+  });
+});
+
+// --- formatOutbound / formatFinalResultOutbound ---
+
+describe('outbound formatting', () => {
+  it('passes through normal outbound text', () => {
+    expect(formatOutbound('hello world')).toBe('hello world');
+  });
+
+  it('drops internal-only text', () => {
+    expect(formatOutbound('<internal>hidden</internal>')).toBe('');
+  });
+
+  it('removes internal blocks and keeps visible text', () => {
+    expect(formatOutbound('<internal>thinking</internal>The answer is 42')).toBe(
+      'The answer is 42',
+    );
+  });
+
+  it('prefixes final result text with the configured mention', () => {
+    expect(formatFinalResultOutbound('dc:123', 'hello world <notify_user />')).toBe(
+      `<@${RESULT_MENTION_DISCORD_USER_ID}> hello world`,
+    );
+  });
+
+  it('does not mention when notify tag is absent', () => {
+    expect(formatFinalResultOutbound('dc:123', 'hello world')).toBe(
+      'hello world',
+    );
+  });
+
+  it('strips direct Discord mentions written by the model', () => {
+    expect(
+      formatFinalResultOutbound(
+        'dc:123',
+        `<@${RESULT_MENTION_DISCORD_USER_ID}> hello world`,
+      ),
+    ).toBe('hello world');
+  });
+
+  it('returns empty string for internal-only final result output', () => {
+    expect(
+      formatFinalResultOutbound('dc:123', '<internal>hidden</internal>'),
+    ).toBe('');
+  });
+
+  it('does not add a text mention for non-Discord channels', () => {
+    expect(formatFinalResultOutbound('tg:123', 'hello world')).toBe(
+      'hello world',
+    );
+  });
+
+  it('strips the notify tag from progress output', () => {
+    expect(formatOutbound('working on it <notify_user />')).toBe(
+      'working on it',
+    );
+  });
+});
+
+describe('parseNotifyUserTag', () => {
+  it('detects notify tags at the end of the message', () => {
+    expect(parseNotifyUserTag('done <notify_user />')).toEqual({
+      text: 'done',
+      notifyUser: true,
+    });
+  });
+
+  it('ignores missing notify tags', () => {
+    expect(parseNotifyUserTag('done')).toEqual({
+      text: 'done',
+      notifyUser: false,
+    });
   });
 });
 

@@ -16,6 +16,11 @@ const envConfig = readEnvFile([
   'AGENT_MODEL',
   'OPENAI_MODEL',
   'OPENAI_API_KEY',
+  'CONTAINER_TIMEOUT',
+  'IDLE_TIMEOUT',
+  'NANOCLAW_RESTART_CMD',
+  'RESULT_MENTION_DISCORD_USER_ID',
+  'RESULT_MENTION_DISPLAY_TEXT',
 ]);
 
 export const ASSISTANT_NAME =
@@ -50,7 +55,7 @@ export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
 export const CONTAINER_TIMEOUT = parseInt(
-  process.env.CONTAINER_TIMEOUT || '1800000',
+  process.env.CONTAINER_TIMEOUT || envConfig.CONTAINER_TIMEOUT || '1800000',
   10,
 );
 export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
@@ -75,12 +80,25 @@ export const OPENAI_MODEL =
   process.env.OPENAI_MODEL || envConfig.OPENAI_MODEL || '';
 export const OPENAI_API_KEY =
   process.env.OPENAI_API_KEY || envConfig.OPENAI_API_KEY || '';
+export const NANOCLAW_RESTART_CMD =
+  process.env.NANOCLAW_RESTART_CMD || envConfig.NANOCLAW_RESTART_CMD || '';
+export const RESULT_MENTION_DISCORD_USER_ID =
+  process.env.RESULT_MENTION_DISCORD_USER_ID ||
+  envConfig.RESULT_MENTION_DISCORD_USER_ID ||
+  '';
+export const RESULT_MENTION_DISPLAY_TEXT =
+  process.env.RESULT_MENTION_DISPLAY_TEXT ||
+  envConfig.RESULT_MENTION_DISPLAY_TEXT ||
+  '';
 export const MAX_MESSAGES_PER_PROMPT = Math.max(
   1,
   parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10,
 );
 export const IPC_POLL_INTERVAL = 1000;
-export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
+export const IDLE_TIMEOUT = parseInt(
+  process.env.IDLE_TIMEOUT || envConfig.IDLE_TIMEOUT || '1800000',
+  10,
+); // 30min default — how long to keep container alive after last result
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,

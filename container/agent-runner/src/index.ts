@@ -26,6 +26,7 @@ interface ContainerInput {
 interface ContainerOutput {
   status: 'success' | 'error';
   result: string | null;
+  phase?: 'progress' | 'final';
   newSessionId?: string;
   error?: string;
 }
@@ -209,6 +210,7 @@ async function executeAppServerTurn(
         writeOutput({
           status: 'success',
           result: trimmed,
+          phase: 'progress',
           newSessionId: threadId,
         });
       },
@@ -353,6 +355,7 @@ async function runCodexBrain(containerInput: ContainerInput): Promise<void> {
         writeOutput({
           status: 'error',
           result: result || null,
+          phase: result ? 'final' : undefined,
           newSessionId: threadId,
           error,
         });
@@ -360,6 +363,7 @@ async function runCodexBrain(containerInput: ContainerInput): Promise<void> {
         writeOutput({
           status: 'success',
           result: result || null,
+          phase: result ? 'final' : undefined,
           newSessionId: threadId,
         });
       }

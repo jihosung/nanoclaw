@@ -27,6 +27,7 @@ describe('GroupQueue', () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.clearAllMocks();
     queue = new GroupQueue();
   });
 
@@ -178,6 +179,40 @@ describe('GroupQueue', () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expect(processMessages).not.toHaveBeenCalled();
+  });
+
+  it('shutdown closes stdin for active containers and force-kills after grace period', async () => {
+    const fs = await import('fs');
+    let resolveProcess: () => void;
+    const proc = { killed: false, kill: vi.fn() } as any;
+
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveProcess = resolve;
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+    queue.registerProcess('group1@g.us', proc, 'container-1', 'test-group');
+
+    const shutdownPromise = queue.shutdown(1000);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2000);
+    await shutdownPromise;
+
+    const writeFileSync = vi.mocked(fs.default.writeFileSync);
+    const closeWrites = writeFileSync.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].endsWith('_close'),
+    );
+    expect(closeWrites).toHaveLength(1);
+    expect(proc.kill).toHaveBeenCalledTimes(1);
+
+    resolveProcess!();
+    await vi.advanceTimersByTimeAsync(10);
   });
 
   // --- Max retries exceeded ---

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import path from 'path';
 import { PassThrough } from 'stream';
 
 // Sentinel markers must match container-runner.ts
@@ -15,6 +16,7 @@ vi.mock('./config.js', () => ({
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
   ONECLI_URL: 'http://localhost:10254',
+  OPENAI_MODEL: null,
   TIMEZONE: 'America/Los_Angeles',
 }));
 
@@ -40,6 +42,7 @@ vi.mock('fs', async () => {
       writeFileSync: vi.fn(),
       readFileSync: vi.fn(() => ''),
       readdirSync: vi.fn(() => []),
+      rmSync: vi.fn(),
       statSync: vi.fn(() => ({ isDirectory: () => false })),
       copyFileSync: vi.fn(),
     },
@@ -105,7 +108,12 @@ vi.mock('child_process', async () => {
   };
 });
 
-import { runContainerAgent, ContainerOutput } from './container-runner.js';
+import fs from 'fs';
+import {
+  runContainerAgent,
+  ContainerOutput,
+  pruneContainerLogs,
+} from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 
 const testGroup: RegisteredGroup = {
@@ -225,5 +233,28 @@ describe('container-runner timeout behavior', () => {
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('session-456');
+  });
+});
+
+describe('pruneContainerLogs', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('removes the oldest container logs beyond the configured limit', () => {
+    vi.mocked(fs.readdirSync).mockReturnValue([
+      'container-2026-04-08T08-00-00-000Z.log',
+      'container-2026-04-08T08-01-00-000Z.log',
+      'container-2026-04-08T08-02-00-000Z.log',
+      'discord-delivery.log',
+    ] as unknown as ReturnType<typeof fs.readdirSync>);
+
+    pruneContainerLogs('/tmp/test-logs', 2);
+
+    expect(fs.rmSync).toHaveBeenCalledTimes(1);
+    expect(fs.rmSync).toHaveBeenCalledWith(
+      path.join('/tmp/test-logs', 'container-2026-04-08T08-00-00-000Z.log'),
+      { force: true },
+    );
   });
 });

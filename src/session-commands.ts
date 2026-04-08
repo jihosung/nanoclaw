@@ -13,11 +13,12 @@ export type SessionCommand =
   | { type: 'clear' }
   | { type: 'stop' }
   | { type: 'compact' }
+  | { type: 'restart' }
   | { type: 'model'; model: string }
   | { type: 'usage' }
   | { type: 'help' };
 
-const COMMAND_RE = /^\/(clear|stop|compact|model|usage|help)(?:\s+(.+))?$/i;
+const COMMAND_RE = /^\/(clear|stop|compact|restart|model|usage|help)(?:\s+(.+))?$/i;
 
 /**
  * Scan messages (latest first) for a session command.
@@ -35,6 +36,7 @@ export function extractCommand(messages: NewMessage[]): SessionCommand | null {
     if (cmd === 'clear') return { type: 'clear' };
     if (cmd === 'stop') return { type: 'stop' };
     if (cmd === 'compact') return { type: 'compact' };
+    if (cmd === 'restart') return { type: 'restart' };
     if (cmd === 'model') return { type: 'model', model: arg };
     if (cmd === 'usage') return { type: 'usage' };
     if (cmd === 'help') return { type: 'help' };
@@ -51,6 +53,8 @@ export interface CommandDeps {
   queue: GroupQueue;
   channel: Channel;
   saveState: () => void;
+  markRestartNotice: (chatJid: string, sourceGroup: string) => void;
+  restartHost: () => Promise<void>;
 }
 
 export async function handleSessionCommand(
@@ -66,6 +70,8 @@ export async function handleSessionCommand(
     queue,
     channel,
     saveState,
+    markRestartNotice,
+    restartHost,
   } = deps;
 
   // Advance cursor so these messages aren't re-processed as agent input
@@ -74,10 +80,16 @@ export async function handleSessionCommand(
 
   switch (command.type) {
     case 'clear': {
-      queue.closeStdin(chatJid);
+      const killed = queue.killProcess(chatJid);
+      if (!killed) {
+        queue.closeStdin(chatJid);
+      }
       deleteSession(group.folder);
       delete sessions[group.folder];
-      logger.info({ group: group.name }, 'Session cleared via /clear command');
+      logger.info(
+        { group: group.name, killedActiveProcess: killed },
+        'Session cleared via /clear command',
+      );
       await channel.sendMessage(
         chatJid,
         'Session cleared. Next message starts a new conversation.',
@@ -105,6 +117,21 @@ export async function handleSessionCommand(
           'No active session to compact. Start a conversation first.',
         );
       }
+      break;
+    }
+
+    case 'restart': {
+      if (!group.isMain) {
+        await channel.sendMessage(
+          chatJid,
+          'The `/restart` command is only allowed in the main channel.',
+        );
+        break;
+      }
+
+      markRestartNotice(chatJid, group.folder);
+      await channel.sendMessage(chatJid, 'Host restart requested.');
+      await restartHost();
       break;
     }
 
@@ -161,6 +188,7 @@ export async function handleSessionCommand(
         '- `/clear`: Clear the current conversation session',
         '- `/stop`: Stop the active agent response',
         '- `/compact`: Compact the active session context',
+        '- `/restart`: Restart the NanoClaw host process (main channel only)',
         '- `/model`: Show the current model and available models',
         '- `/model [model name]`: Change the model for the next message',
         '- `/usage`: Show Codex account usage and reset times',

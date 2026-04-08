@@ -36,6 +36,8 @@ const THIRD_GROUP: RegisteredGroup = {
 
 let groups: Record<string, RegisteredGroup>;
 let deps: IpcDeps;
+let restartCalls: number;
+let restartNoticeCalls: Array<{ chatJid: string; sourceGroup: string }>;
 
 beforeEach(() => {
   _initTestDatabase();
@@ -50,6 +52,8 @@ beforeEach(() => {
   setRegisteredGroup('main@g.us', MAIN_GROUP);
   setRegisteredGroup('other@g.us', OTHER_GROUP);
   setRegisteredGroup('third@g.us', THIRD_GROUP);
+  restartCalls = 0;
+  restartNoticeCalls = [];
 
   deps = {
     sendMessage: async () => {},
@@ -63,6 +67,12 @@ beforeEach(() => {
     getAvailableGroups: () => [],
     writeGroupsSnapshot: () => {},
     onTasksChanged: () => {},
+    markRestartNotice: (chatJid, sourceGroup) => {
+      restartNoticeCalls.push({ chatJid, sourceGroup });
+    },
+    restartHost: async () => {
+      restartCalls += 1;
+    },
   };
 });
 
@@ -379,6 +389,36 @@ describe('refresh_groups authorization', () => {
       deps,
     );
     // If we got here without error, the auth gate worked
+  });
+});
+
+// --- restart_host authorization ---
+
+describe('restart_host authorization', () => {
+  it('non-main group cannot restart host', async () => {
+    await processTaskIpc(
+      { type: 'restart_host', reason: 'nope' },
+      'other-group',
+      false,
+      deps,
+    );
+
+    expect(restartCalls).toBe(0);
+    expect(restartNoticeCalls).toHaveLength(0);
+  });
+
+  it('main group can restart host', async () => {
+    await processTaskIpc(
+      { type: 'restart_host', reason: 'maintenance', chatJid: 'main@g.us' },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    expect(restartCalls).toBe(1);
+    expect(restartNoticeCalls).toEqual([
+      { chatJid: 'main@g.us', sourceGroup: 'whatsapp_main' },
+    ]);
   });
 });
 

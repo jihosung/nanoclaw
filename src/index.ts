@@ -54,7 +54,18 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
-import { findChannel, formatMessages, formatOutbound } from './router.js';
+import { restartHostProcess } from './host-restart.js';
+import {
+  findChannel,
+  formatFinalResultOutbound,
+  formatMessages,
+  formatOutbound,
+} from './router.js';
+import {
+  clearRestartNotice,
+  readRestartNotice,
+  writeRestartNotice,
+} from './restart-notice.js';
 import {
   isSenderAllowed,
   isTriggerAllowed,
@@ -91,6 +102,11 @@ const channels: Channel[] = [];
 const queue = new GroupQueue();
 
 const onecli = new OneCLI({ url: ONECLI_URL });
+
+async function gracefulRestartHost(): Promise<void> {
+  await queue.shutdown(10000);
+  await restartHostProcess();
+}
 
 function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
   if (group.isMain) return;
@@ -318,7 +334,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           TRANSLATOR_ENABLED && TRANSLATOR_URL
             ? await translateToKorean(text, TRANSLATOR_URL, TRANSLATOR_MODEL)
             : text;
-        await channel.sendMessage(chatJid, outText);
+        const outboundText =
+          result.phase === 'final'
+            ? formatFinalResultOutbound(chatJid, outText)
+            : formatOutbound(outText);
+        if (outboundText) {
+          await channel.sendMessage(chatJid, outboundText);
+        }
         outputSentToUser = true;
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
@@ -551,6 +573,9 @@ async function startMessageLoop(): Promise<void> {
               queue,
               channel,
               saveState,
+              markRestartNotice: (jid, sourceGroup) =>
+                writeRestartNotice(jid, sourceGroup),
+              restartHost: gracefulRestartHost,
             });
             continue;
           }
@@ -728,6 +753,30 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const pendingRestartNotice = readRestartNotice();
+  if (pendingRestartNotice) {
+    const channel = findChannel(channels, pendingRestartNotice.chatJid);
+    if (!channel) {
+      logger.warn(
+        { chatJid: pendingRestartNotice.chatJid },
+        'Restart notice pending but no channel owns JID',
+      );
+    } else {
+      try {
+        await channel.sendMessage(
+          pendingRestartNotice.chatJid,
+          '재시작되었습니다.',
+        );
+        clearRestartNotice();
+      } catch (err) {
+        logger.warn(
+          { chatJid: pendingRestartNotice.chatJid, err },
+          'Failed to deliver restart notice; will retry on next startup',
+        );
+      }
+    }
+  }
+
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
@@ -779,6 +828,10 @@ async function main(): Promise<void> {
         writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
       }
     },
+    markRestartNotice: (chatJid, sourceGroup) => {
+      writeRestartNotice(chatJid, sourceGroup);
+    },
+    restartHost: gracefulRestartHost,
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();

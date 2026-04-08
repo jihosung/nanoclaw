@@ -35,6 +35,20 @@ export class GroupQueue {
     null;
   private shuttingDown = false;
 
+  private waitForIdle(timeoutMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      const deadline = Date.now() + timeoutMs;
+      const tick = () => {
+        if (this.activeCount === 0 || Date.now() >= deadline) {
+          resolve();
+          return;
+        }
+        setTimeout(tick, 100);
+      };
+      tick();
+    });
+  }
+
   private getGroup(groupJid: string): GroupState {
     let state = this.groups.get(groupJid);
     if (!state) {
@@ -362,22 +376,55 @@ export class GroupQueue {
     }
   }
 
-  async shutdown(_gracePeriodMs: number): Promise<void> {
+  async shutdown(gracePeriodMs: number): Promise<void> {
     this.shuttingDown = true;
 
-    // Count active containers but don't kill them — they'll finish on their own
-    // via idle timeout or container timeout. The --rm flag cleans them up on exit.
-    // This prevents WhatsApp reconnection restarts from killing working agents.
     const activeContainers: string[] = [];
-    for (const [_jid, state] of this.groups) {
+    const activeGroups: string[] = [];
+    for (const [jid, state] of this.groups) {
       if (state.process && !state.process.killed && state.containerName) {
+        activeGroups.push(jid);
         activeContainers.push(state.containerName);
       }
     }
 
     logger.info(
-      { activeCount: this.activeCount, detachedContainers: activeContainers },
-      'GroupQueue shutting down (containers detached, not killed)',
+      { activeCount: this.activeCount, activeContainers, gracePeriodMs },
+      'GroupQueue shutting down',
+    );
+
+    for (const jid of activeGroups) {
+      this.closeStdin(jid);
+    }
+
+    await this.waitForIdle(gracePeriodMs);
+
+    if (this.activeCount === 0) {
+      logger.info('GroupQueue shutdown complete within grace period');
+      return;
+    }
+
+    const forceKilled: string[] = [];
+    for (const [jid, state] of this.groups) {
+      if (!state.process || state.process.killed || !state.containerName) {
+        continue;
+      }
+      state.process.kill();
+      forceKilled.push(jid);
+    }
+
+    if (forceKilled.length > 0) {
+      logger.warn(
+        { forceKilled, remainingActiveCount: this.activeCount },
+        'Force-killed active containers during shutdown',
+      );
+    }
+
+    await this.waitForIdle(2000);
+
+    logger.info(
+      { remainingActiveCount: this.activeCount },
+      'GroupQueue shutdown finished',
     );
   }
 }

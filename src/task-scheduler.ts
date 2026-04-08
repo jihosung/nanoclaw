@@ -19,6 +19,7 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
+import { formatFinalResultOutbound, formatOutbound } from './router.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
 /**
@@ -187,8 +188,13 @@ async function runTask(
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          const outboundText =
+            streamedOutput.phase === 'final'
+              ? formatFinalResultOutbound(task.chat_jid, streamedOutput.result)
+              : formatOutbound(streamedOutput.result);
+          if (outboundText) {
+            await deps.sendMessage(task.chat_jid, outboundText);
+          }
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {

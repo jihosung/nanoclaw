@@ -51,14 +51,50 @@ export interface ContainerInput {
 export interface ContainerOutput {
   status: 'success' | 'error';
   result: string | null;
+  phase?: 'progress' | 'final';
   newSessionId?: string;
   error?: string;
 }
+
+const MAX_CONTAINER_LOG_FILES = 100;
 
 interface VolumeMount {
   hostPath: string;
   containerPath: string;
   readonly: boolean;
+}
+
+export function pruneContainerLogs(
+  logsDir: string,
+  maxFiles: number = MAX_CONTAINER_LOG_FILES,
+): void {
+  const containerLogs = fs
+    .readdirSync(logsDir)
+    .filter(
+      (name) => name.startsWith('container-') && name.toLowerCase().endsWith('.log'),
+    )
+    .sort();
+
+  const filesToDelete = containerLogs.slice(
+    0,
+    Math.max(0, containerLogs.length - maxFiles),
+  );
+
+  for (const fileName of filesToDelete) {
+    fs.rmSync(path.join(logsDir, fileName), { force: true });
+  }
+}
+
+function writeContainerLogFile(
+  logsDir: string,
+  fileName: string,
+  contents: string,
+): string {
+  fs.mkdirSync(logsDir, { recursive: true });
+  const logFile = path.join(logsDir, fileName);
+  fs.writeFileSync(logFile, contents);
+  pruneContainerLogs(logsDir);
+  return logFile;
 }
 
 function buildVolumeMounts(
@@ -556,9 +592,9 @@ export async function runContainerAgent(
 
       if (timedOut) {
         const ts = new Date().toISOString().replace(/[:.]/g, '-');
-        const timeoutLog = path.join(logsDir, `container-${ts}.log`);
-        fs.writeFileSync(
-          timeoutLog,
+        const timeoutLog = writeContainerLogFile(
+          logsDir,
+          `container-${ts}.log`,
           [
             `=== Container Run Log (TIMEOUT) ===`,
             `Timestamp: ${new Date().toISOString()}`,
@@ -602,7 +638,6 @@ export async function runContainerAgent(
       }
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const logFile = path.join(logsDir, `container-${timestamp}.log`);
       const isVerbose =
         process.env.LOG_LEVEL === 'debug' || process.env.LOG_LEVEL === 'trace';
 
@@ -666,7 +701,11 @@ export async function runContainerAgent(
         );
       }
 
-      fs.writeFileSync(logFile, logLines.join('\n'));
+      const logFile = writeContainerLogFile(
+        logsDir,
+        `container-${timestamp}.log`,
+        logLines.join('\n'),
+      );
       logger.debug({ logFile, verbose: isVerbose }, 'Container log written');
 
       if (code !== 0) {

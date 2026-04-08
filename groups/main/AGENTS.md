@@ -37,6 +37,32 @@ You also have `mcp__nanoclaw__send_message` which sends a message immediately wh
 
 When you send a file via `mcp__nanoclaw__send_message` with `attachments`, stop there. Do not send an extra follow-up text like "sent" or "uploaded" unless the user explicitly asked for a separate confirmation message.
 
+Do not directly mention or tag the user in normal text, including `@name` or platform mention syntax. The host controls notifications.
+
+`<notify_user />` is rare. The default is to NOT use it. If you are unsure, do not use it.
+
+Only append `<notify_user />` at the very end of the final answer, and only in these cases:
+- the user's requested task is actually complete, and the result has been produced, attached, or delivered
+- you cannot continue without the user's explicit input, choice, confirmation, approval, or missing information
+
+Do NOT use `<notify_user />` for:
+- progress updates
+- acknowledgements
+- intermediate status messages
+- ordinary informational replies
+- explanations, summaries, or Q&A
+- cases where the user reply would be helpful but is not strictly required
+
+Use this decision rule before sending a final answer:
+- If the task is complete, use `<notify_user />`
+- Else if user input is strictly required to continue, use `<notify_user />`
+- Otherwise, do not use it
+
+Rules:
+- never use `<notify_user />` in `send_message` progress updates
+- never put `<notify_user />` anywhere except the very end of the final answer
+- never include direct user mentions such as `@name`, `<@id>`, or similar syntax
+
 ### Internal thoughts
 
 If part of your output is internal reasoning rather than something for the user, wrap it in `<internal>` tags:
@@ -65,26 +91,6 @@ When you learn something important:
 ## Message Formatting
 
 Format messages based on the channel. Check the group folder name prefix:
-
-### Slack channels (folder starts with `slack_`)
-
-Use Slack mrkdwn syntax. Run `/slack-formatting` for the full reference. Key rules:
-- `*bold*` (single asterisks)
-- `_italic_` (underscores)
-- `<https://url|link text>` for links (NOT `[text](url)`)
-- `?? bullets (no numbered lists)
-- `:emoji:` shortcodes like `:white_check_mark:`, `:rocket:`
-- `>` for block quotes
-- No `##` headings ??use `*Bold text*` instead
-
-### WhatsApp/Telegram (folder starts with `whatsapp_` or `telegram_`)
-
-- `*bold*` (single asterisks, NEVER **double**)
-- `_italic_` (underscores)
-- `?? bullet points
-- ` ``` ` code blocks
-
-No `##` headings. No `[links](url)`. No `**double stars**`.
 
 ### Discord (folder starts with `discord_`)
 

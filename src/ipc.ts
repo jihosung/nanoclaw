@@ -26,6 +26,8 @@ export interface IpcDeps {
     registeredJids: Set<string>,
   ) => void;
   onTasksChanged: () => void;
+  markRestartNotice: (chatJid: string, sourceGroup: string) => void;
+  restartHost: () => Promise<void>;
 }
 
 let ipcWatcherRunning = false;
@@ -245,6 +247,8 @@ export async function processTaskIpc(
     agentProfile?: RegisteredGroup['agentProfile'];
     // For update_model
     model?: string;
+    // For restart_host
+    reason?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -574,6 +578,31 @@ export async function processTaskIpc(
       } else {
         logger.warn({ data }, 'update_model: missing jid or model');
       }
+      break;
+
+    case 'restart_host':
+      // Only main group can restart the host.
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized restart_host attempt blocked',
+        );
+        break;
+      }
+
+      logger.warn(
+        { sourceGroup, reason: data.reason || 'requested-via-ipc' },
+        'Host restart requested via IPC',
+      );
+      if (data.chatJid) {
+        deps.markRestartNotice(data.chatJid, sourceGroup);
+      } else {
+        const fallbackJid = Object.entries(registeredGroups).find(
+          ([, g]) => g.folder === sourceGroup,
+        )?.[0];
+        if (fallbackJid) deps.markRestartNotice(fallbackJid, sourceGroup);
+      }
+      await deps.restartHost();
       break;
 
     default:

@@ -553,6 +553,50 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+server.tool(
+  'restart_host',
+  'Restart the NanoClaw host process. Main group only. Use for admin operations like applying configuration changes.',
+  {
+    reason: z
+      .string()
+      .optional()
+      .describe('Optional short reason for audit logs (e.g. "apply new env")'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main group can restart the host.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'restart_host',
+      chatJid,
+      reason: args.reason || undefined,
+      groupFolder,
+      isMain,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: 'Host restart requested. The service should come back automatically if supervised.',
+        },
+      ],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

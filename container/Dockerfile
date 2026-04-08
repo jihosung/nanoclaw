@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y \
     libcups2 \
     libdrm2 \
     libxshmfence1 \
+    bubblewrap \
     curl \
     git \
     python3 \
