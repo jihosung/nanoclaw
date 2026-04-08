@@ -236,15 +236,15 @@ describe('outbound formatting', () => {
   });
 
   it('removes internal blocks and keeps visible text', () => {
-    expect(formatOutbound('<internal>thinking</internal>The answer is 42')).toBe(
-      'The answer is 42',
-    );
+    expect(
+      formatOutbound('<internal>thinking</internal>The answer is 42'),
+    ).toBe('The answer is 42');
   });
 
   it('prefixes final result text with the configured mention', () => {
-    expect(formatFinalResultOutbound('dc:123', 'hello world <notify_user />')).toBe(
-      `<@${RESULT_MENTION_DISCORD_USER_ID}> hello world`,
-    );
+    expect(
+      formatFinalResultOutbound('dc:123', 'hello world <notify_user />'),
+    ).toBe(`<@${RESULT_MENTION_DISCORD_USER_ID}> hello world`);
   });
 
   it('does not mention when notify tag is absent', () => {

@@ -18,7 +18,8 @@ export type SessionCommand =
   | { type: 'usage' }
   | { type: 'help' };
 
-const COMMAND_RE = /^\/(clear|stop|compact|restart|model|usage|help)(?:\s+(.+))?$/i;
+const COMMAND_RE =
+  /^\/(clear|stop|compact|restart|model|usage|help)(?:\s+(.+))?$/i;
 
 /**
  * Scan messages (latest first) for a session command.

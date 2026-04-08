@@ -94,7 +94,10 @@ function stripControlledMentions(text: string): string {
     cleaned = cleaned.replace(new RegExp(escaped, 'gi'), '').trim();
   }
 
-  return cleaned.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  return cleaned
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function escapeRegex(str: string): string {

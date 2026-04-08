@@ -71,7 +71,8 @@ export function pruneContainerLogs(
   const containerLogs = fs
     .readdirSync(logsDir)
     .filter(
-      (name) => name.startsWith('container-') && name.toLowerCase().endsWith('.log'),
+      (name) =>
+        name.startsWith('container-') && name.toLowerCase().endsWith('.log'),
     )
     .sort();
 

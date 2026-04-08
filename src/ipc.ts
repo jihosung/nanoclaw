@@ -563,10 +563,7 @@ export async function processTaskIpc(
       if (data.jid) {
         deps.unregisterGroup(data.jid);
       } else {
-        logger.warn(
-          { data },
-          'Invalid unregister_group request - missing jid',
-        );
+        logger.warn({ data }, 'Invalid unregister_group request - missing jid');
       }
       break;
 
