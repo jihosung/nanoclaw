@@ -517,6 +517,12 @@ Use available_groups.json to find the JID for a group. The folder name must be c
         'Channel-prefixed folder name (e.g., "whatsapp_family-chat", "telegram_dev-team")',
       ),
     trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
+    requiresTrigger: z
+      .boolean()
+      .optional()
+      .describe(
+        'Whether trigger prefix is required to respond. Default true. Set false for always-on channels.',
+      ),
   },
   async (args) => {
     if (!isMain) {
@@ -538,6 +544,9 @@ Use available_groups.json to find the JID for a group. The folder name must be c
       folder: args.folder,
       trigger: args.trigger,
       timestamp: new Date().toISOString(),
+      ...(args.requiresTrigger !== undefined
+        ? { requiresTrigger: args.requiresTrigger }
+        : {}),
     };
 
     writeIpcFile(TASKS_DIR, data);

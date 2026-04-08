@@ -195,7 +195,8 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   const groupMdFile = path.join(groupDir, 'AGENTS.md');
   if (!fs.existsSync(groupMdFile)) {
     if (group.isMain) {
-      const templateFile = path.join(GROUPS_DIR, 'main', 'AGENTS.md');
+      const mainTemplateDir = path.join(GROUPS_DIR, 'main');
+      const templateFile = path.join(mainTemplateDir, 'AGENTS.md');
       if (fs.existsSync(templateFile)) {
         let content = fs.readFileSync(templateFile, 'utf-8');
         if (ASSISTANT_NAME !== 'Andy') {
@@ -210,6 +211,21 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
           { folder: group.folder },
           'Created main AGENTS.md from template',
         );
+      }
+
+      const templateDocsDir = path.join(mainTemplateDir, 'docs');
+      const targetDocsDir = path.join(groupDir, 'docs');
+      if (fs.existsSync(templateDocsDir)) {
+        fs.mkdirSync(targetDocsDir, { recursive: true });
+        for (const entry of fs.readdirSync(templateDocsDir, { withFileTypes: true })) {
+          if (!entry.isFile()) continue;
+          if (!entry.name.toLowerCase().endsWith('.md')) continue;
+          const srcFile = path.join(templateDocsDir, entry.name);
+          const dstFile = path.join(targetDocsDir, entry.name);
+          if (!fs.existsSync(dstFile)) {
+            fs.copyFileSync(srcFile, dstFile);
+          }
+        }
       }
     } else {
       const stub = [

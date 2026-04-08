@@ -127,10 +127,9 @@ export async function run(args: string[]): Promise<void> {
   );
   if (!fs.existsSync(groupAgentsPath)) {
     if (parsed.isMain) {
+      const mainTemplateDir = path.join(projectRoot, 'groups', 'main');
       const agentsTemplatePath = path.join(
-        projectRoot,
-        'groups',
-        'main',
+        mainTemplateDir,
         'AGENTS.md',
       );
       if (fs.existsSync(agentsTemplatePath)) {
@@ -147,6 +146,21 @@ export async function run(args: string[]): Promise<void> {
           { file: groupAgentsPath, template: agentsTemplatePath },
           'Created AGENTS.md from main template',
         );
+      }
+
+      const templateDocsDir = path.join(mainTemplateDir, 'docs');
+      const targetDocsDir = path.join(projectRoot, 'groups', parsed.folder, 'docs');
+      if (fs.existsSync(templateDocsDir)) {
+        fs.mkdirSync(targetDocsDir, { recursive: true });
+        for (const entry of fs.readdirSync(templateDocsDir, { withFileTypes: true })) {
+          if (!entry.isFile()) continue;
+          if (!entry.name.toLowerCase().endsWith('.md')) continue;
+          const srcFile = path.join(templateDocsDir, entry.name);
+          const dstFile = path.join(targetDocsDir, entry.name);
+          if (!fs.existsSync(dstFile)) {
+            fs.copyFileSync(srcFile, dstFile);
+          }
+        }
       }
     } else {
       const stub = [

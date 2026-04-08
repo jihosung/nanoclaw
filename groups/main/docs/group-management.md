@@ -75,7 +75,7 @@ Fields:
 ## Adding a Group
 
 1. Query the database to find the group's JID.
-2. Use the `register_group` MCP tool with the JID, name, folder, and trigger.
+2. Use the `register_group` MCP tool with JID, name, folder, trigger, and optional `requiresTrigger` (set `false` for always-on channels).
 3. Optionally include `containerConfig` for additional mounts.
 4. The group folder is created automatically: `/workspace/project/groups/{folder-name}/`.
 5. For non-main groups, keep that group's `AGENTS.md` channel-specific and lightweight:

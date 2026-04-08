@@ -149,6 +149,12 @@ Key files:
 - `src/db.ts` - SQLite operations (messages, groups, sessions, state)
 - `groups/*/CLAUDE.md` - Per-group memory
 
+## How to run Nanoclaw?
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','Set-Location ''E:\Workspace\Docker\nanoclaw''; npm start'"
+```
+This command makes new powershell window where nanoclaw runs.
+
 ## FAQ
 
 **Why Docker?**
