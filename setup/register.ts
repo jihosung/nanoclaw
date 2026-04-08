@@ -116,6 +116,54 @@ export async function run(args: string[]): Promise<void> {
     recursive: true,
   });
 
+  // Create AGENTS.md in the new group folder if it doesn't exist.
+  // main uses the full main template; non-main starts with a lightweight
+  // channel-local stub that references the global baseline.
+  const groupAgentsPath = path.join(
+    projectRoot,
+    'groups',
+    parsed.folder,
+    'AGENTS.md',
+  );
+  if (!fs.existsSync(groupAgentsPath)) {
+    if (parsed.isMain) {
+      const agentsTemplatePath = path.join(
+        projectRoot,
+        'groups',
+        'main',
+        'AGENTS.md',
+      );
+      if (fs.existsSync(agentsTemplatePath)) {
+        let content = fs.readFileSync(agentsTemplatePath, 'utf-8');
+        if (parsed.assistantName !== 'Andy') {
+          content = content.replace(/^# Andy$/m, `# ${parsed.assistantName}`);
+          content = content.replace(
+            /You are Andy/g,
+            `You are ${parsed.assistantName}`,
+          );
+        }
+        fs.writeFileSync(groupAgentsPath, content);
+        logger.info(
+          { file: groupAgentsPath, template: agentsTemplatePath },
+          'Created AGENTS.md from main template',
+        );
+      }
+    } else {
+      const stub = [
+        `# ${parsed.assistantName}`,
+        ``,
+        `This channel follows the global baseline instructions at:`,
+        `- /workspace/global/AGENTS.md`,
+        ``,
+        `## Channel-Specific Overrides`,
+        `<!-- Add channel-specific rules here only when requested. -->`,
+        ``,
+      ].join('\n');
+      fs.writeFileSync(groupAgentsPath, stub);
+      logger.info({ file: groupAgentsPath }, 'Created AGENTS.md baseline stub');
+    }
+  }
+
   // Create CLAUDE.md in the new group folder from template if it doesn't exist.
   // The agent runs with CWD=/workspace/group and loads CLAUDE.md from there.
   // Never overwrite an existing CLAUDE.md — users customize these extensively

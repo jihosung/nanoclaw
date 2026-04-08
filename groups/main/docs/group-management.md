@@ -78,7 +78,20 @@ Fields:
 2. Use the `register_group` MCP tool with the JID, name, folder, and trigger.
 3. Optionally include `containerConfig` for additional mounts.
 4. The group folder is created automatically: `/workspace/project/groups/{folder-name}/`.
-5. Optionally create an initial `AGENTS.md` for the group.
+5. For non-main groups, keep that group's `AGENTS.md` channel-specific and lightweight:
+   - Treat `/workspace/global/AGENTS.md` as the global baseline reference.
+   - Put channel-specific behavior only in `/workspace/project/groups/<folder>/AGENTS.md`.
+   - Start custom channel sections as placeholders and fill them only when the user asks.
+
+Recommended initial block for non-main group AGENTS:
+
+```md
+## Global Baseline
+Follow `/workspace/global/AGENTS.md` for shared defaults.
+
+## Channel-Specific Overrides
+<!-- Add channel-specific rules here only when requested. -->
+```
 
 Folder naming convention (channel prefix with underscore separator):
 - WhatsApp "Family Chat" -> `whatsapp_family-chat`

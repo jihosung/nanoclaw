@@ -188,23 +188,45 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   // Create group folder
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
 
-  // Copy AGENTS.md template into the new group folder so agents have
-  // identity and instructions from the first run.
+  // Seed AGENTS.md for new groups:
+  // - main group keeps full main template
+  // - non-main groups start with a lightweight stub that references
+  //   the global baseline and leaves room for channel-specific overrides
   const groupMdFile = path.join(groupDir, 'AGENTS.md');
   if (!fs.existsSync(groupMdFile)) {
-    const templateFile = path.join(
-      GROUPS_DIR,
-      group.isMain ? 'main' : 'global',
-      'AGENTS.md',
-    );
-    if (fs.existsSync(templateFile)) {
-      let content = fs.readFileSync(templateFile, 'utf-8');
-      if (ASSISTANT_NAME !== 'Andy') {
-        content = content.replace(/^# Andy$/m, `# ${ASSISTANT_NAME}`);
-        content = content.replace(/You are Andy/g, `You are ${ASSISTANT_NAME}`);
+    if (group.isMain) {
+      const templateFile = path.join(GROUPS_DIR, 'main', 'AGENTS.md');
+      if (fs.existsSync(templateFile)) {
+        let content = fs.readFileSync(templateFile, 'utf-8');
+        if (ASSISTANT_NAME !== 'Andy') {
+          content = content.replace(/^# Andy$/m, `# ${ASSISTANT_NAME}`);
+          content = content.replace(
+            /You are Andy/g,
+            `You are ${ASSISTANT_NAME}`,
+          );
+        }
+        fs.writeFileSync(groupMdFile, content);
+        logger.info(
+          { folder: group.folder },
+          'Created main AGENTS.md from template',
+        );
       }
-      fs.writeFileSync(groupMdFile, content);
-      logger.info({ folder: group.folder }, 'Created AGENTS.md from template');
+    } else {
+      const stub = [
+        `# ${ASSISTANT_NAME}`,
+        ``,
+        `This channel follows the global baseline instructions at:`,
+        `- /workspace/global/AGENTS.md`,
+        ``,
+        `## Channel-Specific Overrides`,
+        `<!-- Add channel-specific rules here only when requested. -->`,
+        ``,
+      ].join('\n');
+      fs.writeFileSync(groupMdFile, stub);
+      logger.info(
+        { folder: group.folder },
+        'Created non-main AGENTS.md baseline stub',
+      );
     }
   }
 
