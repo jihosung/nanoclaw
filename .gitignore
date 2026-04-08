@@ -17,8 +17,12 @@ groups/main/*
 groups/global/*
 !groups/main/AGENTS.md
 !groups/main/CLAUDE.md
+!groups/main/docs/
+!groups/main/docs/*.md
 !groups/global/AGENTS.md
 !groups/global/CLAUDE.md
+!groups/global/docs/
+!groups/global/docs/*.md
 
 # Secrets
 *.keys.json
@@ -39,3 +43,4 @@ groups/global/*
 .nanoclaw/
 
 agents-sdk-docs
+
