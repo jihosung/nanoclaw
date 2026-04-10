@@ -12,6 +12,10 @@ import {
 import { deleteSession, setRegisteredGroup } from './db.js';
 import { logger } from './logger.js';
 import { GroupQueue } from './group-queue.js';
+import {
+  formatSessionCommand,
+  SESSION_COMMAND_PREFIX,
+} from './session-command-format.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 
 export type SessionCommand =
@@ -24,8 +28,10 @@ export type SessionCommand =
   | { type: 'usage' }
   | { type: 'help' };
 
-const COMMAND_RE =
-  /^\/(clear|stop|compact|restart|model|effort|usage|help)(?:\s+(.+))?$/i;
+const COMMAND_RE = new RegExp(
+  `^\\${SESSION_COMMAND_PREFIX}(clear|stop|compact|restart|model|effort|usage|help)(?:\\s+(.+))?$`,
+  'i',
+);
 
 /**
  * Scan messages (latest first) for a session command.
@@ -148,7 +154,7 @@ export async function handleSessionCommand(
       });
       logger.info(
         { group: group.name, killedActiveProcess: killed },
-        'Session cleared via /clear command',
+        `Session cleared via ${formatSessionCommand('clear')} command`,
       );
       await channel.sendMessage(
         chatJid,
@@ -161,7 +167,10 @@ export async function handleSessionCommand(
       const isActive = queue.isActive(chatJid);
       if (isActive) {
         queue.closeStdin(chatJid);
-        logger.info({ group: group.name }, '/stop command: sent close signal');
+        logger.info(
+          { group: group.name },
+          `${formatSessionCommand('stop')} command: sent close signal`,
+        );
         await channel.sendMessage(chatJid, 'Agent stop signal sent.');
       } else {
         await channel.sendMessage(chatJid, 'No active agent to stop.');
@@ -170,7 +179,7 @@ export async function handleSessionCommand(
     }
 
     case 'compact': {
-      const piped = queue.sendMessage(chatJid, '/compact');
+      const piped = queue.sendMessage(chatJid, formatSessionCommand('compact'));
       if (!piped) {
         await channel.sendMessage(
           chatJid,
@@ -184,7 +193,7 @@ export async function handleSessionCommand(
       if (!group.isMain) {
         await channel.sendMessage(
           chatJid,
-          'The `/restart` command is only allowed in the main channel.',
+          `The \`${formatSessionCommand('restart')}\` command is only allowed in the main channel.`,
         );
         break;
       }
@@ -218,7 +227,7 @@ export async function handleSessionCommand(
       });
       logger.info(
         { group: group.name, model: command.model },
-        'Model updated via /model command',
+        `Model updated via ${formatSessionCommand('model')} command`,
       );
       await sendEffortPrompt(
         command.model,
@@ -277,7 +286,7 @@ export async function handleSessionCommand(
       });
       logger.info(
         { group: group.name, model: effectiveModel, effort: selectedEffort },
-        'Effort updated via /effort command',
+        `Effort updated via ${formatSessionCommand('effort')} command`,
       );
       await channel.sendMessage(
         chatJid,
@@ -305,16 +314,16 @@ export async function handleSessionCommand(
     case 'help': {
       const lines = [
         'Commands',
-        '- `/help`: Show available commands',
-        '- `/clear`: Clear the current conversation session',
-        '- `/stop`: Stop the active agent response',
-        '- `/compact`: Compact the active session context',
-        '- `/restart`: Restart the NanoClaw host process (main channel only)',
-        '- `/model`: Show the current model, effort, and available models',
-        '- `/model [model name]`: Change the model and open effort selection',
-        '- `/effort`: Show the current model effort options',
-        '- `/effort [effort]`: Change the reasoning effort for the next message',
-        '- `/usage`: Show Codex account usage and reset times',
+        `- \`${formatSessionCommand('help')}\`: Show available commands`,
+        `- \`${formatSessionCommand('clear')}\`: Clear the current conversation session`,
+        `- \`${formatSessionCommand('stop')}\`: Stop the active agent response`,
+        `- \`${formatSessionCommand('compact')}\`: Compact the active session context`,
+        `- \`${formatSessionCommand('restart')}\`: Restart the NanoClaw host process (main channel only)`,
+        `- \`${formatSessionCommand('model')}\`: Show the current model, effort, and available models`,
+        `- \`${formatSessionCommand('model', '[model name]')}\`: Change the model and open effort selection`,
+        `- \`${formatSessionCommand('effort')}\`: Show the current model effort options`,
+        `- \`${formatSessionCommand('effort', '[effort]')}\`: Change the reasoning effort for the next message`,
+        `- \`${formatSessionCommand('usage')}\`: Show Codex account usage and reset times`,
       ];
 
       await channel.setTyping?.(chatJid, false);

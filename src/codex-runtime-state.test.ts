@@ -52,7 +52,7 @@ describe('codex runtime state', () => {
     });
 
     expect(formatCodexModelStatus('dc:1', 'gpt-5.4')).toBe(
-      'Model\n- Current: `gpt-5`\n- Effort: `high`\n- Available: gpt-5 (default), gpt-5-mini\n- Change model: `/model [model name]`\n- Change effort: `/effort`\n- Example: `/model gpt-5`',
+      'Model\n- Current: `gpt-5`\n- Effort: `high`\n- Available: gpt-5 (default), gpt-5-mini\n- Change model: `!model [model name]`\n- Change effort: `!effort`\n- Example: `!model gpt-5`',
     );
   });
 
@@ -100,7 +100,7 @@ describe('codex runtime state', () => {
       availableModels: 'gpt-5.4 (default), gpt-5.4-mini',
     });
 
-    expect(getExampleCodexModelCommand('dc:1')).toBe('/model gpt-5.4');
+    expect(getExampleCodexModelCommand('dc:1')).toBe('!model gpt-5.4');
   });
 
   it('formats effort options from the model catalog', () => {

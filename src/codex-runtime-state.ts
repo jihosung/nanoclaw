@@ -3,6 +3,7 @@ import path from 'path';
 
 import { DATA_DIR } from './config.js';
 import { getRouterState, setRouterState } from './db.js';
+import { formatSessionCommand } from './session-command-format.js';
 
 export interface CodexRuntimeState {
   requestedModel?: string;
@@ -80,8 +81,10 @@ export function formatCodexModelStatus(
     lines.push(`- Available: ${availableModels}`);
   }
 
-  lines.push(`- Change model: \`/model [model name]\``);
-  lines.push(`- Change effort: \`/effort\``);
+  lines.push(
+    `- Change model: \`${formatSessionCommand('model', '[model name]')}\``,
+  );
+  lines.push(`- Change effort: \`${formatSessionCommand('effort')}\``);
   lines.push(`- Example: \`${getExampleCodexModelCommand(chatJid)}\``);
 
   return lines.join('\n');
@@ -167,7 +170,7 @@ export function getExampleCodexModelCommand(chatJid: string): string {
     .map((entry) => entry.trim().replace(/\s+\(default\)$/i, ''))
     .find(Boolean);
 
-  return `/model ${firstModel || 'gpt-5.4'}`;
+  return formatSessionCommand('model', firstModel || 'gpt-5.4');
 }
 
 export function getModelCatalog(chatJid: string): CodexModelCatalogEntry[] {

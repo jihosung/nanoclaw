@@ -51,7 +51,7 @@ describe('handleSessionCommand clear', () => {
     chat_jid: 'dc:test',
     sender: 'user1',
     sender_name: 'User',
-    content: '/clear',
+    content: '!clear',
     timestamp: '2026-04-08T09:00:00.000Z',
   };
 
@@ -107,12 +107,12 @@ describe('handleSessionCommand clear', () => {
     );
   });
 
-  it('recognizes /effort commands', () => {
+  it('recognizes !effort commands', () => {
     expect(
       extractCommand([
         {
           ...lastMessage,
-          content: '/effort high',
+          content: '!effort high',
         },
       ]),
     ).toEqual({ type: 'effort', effort: 'high' });
@@ -155,7 +155,7 @@ describe('handleSessionCommand clear', () => {
         group: { ...group, agentProfile: { brain: 'codex', model: 'gpt-5.4' } },
         lastMessage: {
           ...lastMessage,
-          content: '/model gpt-5.4-mini',
+          content: '!model gpt-5.4-mini',
         },
         sessions,
         lastAgentTimestamp,

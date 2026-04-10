@@ -1,3 +1,5 @@
+import { formatSessionCommand } from './session-command-format.js';
+
 export interface ParsedAgentError {
   status?: number;
   type?: string;
@@ -45,7 +47,7 @@ export function toUserFacingAgentError(
     return {
       text:
         `Model error: ${message}\n` +
-        'Use `/model <supported-model>` and resend your message. Example: `/model gpt-5`.',
+        `Use \`${formatSessionCommand('model', '<supported-model>')}\` and resend your message. Example: \`${formatSessionCommand('model', 'gpt-5')}\`.`,
       suppressRetry: true,
     };
   }
@@ -58,7 +60,7 @@ export function toUserFacingAgentError(
     return {
       text:
         `Request error: ${message}\n` +
-        'Fix the request and resend. If this is a model issue, try `/model <supported-model>`.',
+        `Fix the request and resend. If this is a model issue, try \`${formatSessionCommand('model', '<supported-model>')}\`.`,
       suppressRetry: true,
     };
   }

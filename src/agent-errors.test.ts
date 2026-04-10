@@ -31,7 +31,7 @@ describe('toUserFacingAgentError', () => {
     expect(result).toEqual({
       text:
         "Model error: The 'o4-mini' model is not supported when using Codex with a ChatGPT account.\n" +
-        'Use `/model <supported-model>` and resend your message. Example: `/model gpt-5`.',
+        'Use `!model <supported-model>` and resend your message. Example: `!model gpt-5`.',
       suppressRetry: true,
     });
   });
@@ -44,7 +44,7 @@ describe('toUserFacingAgentError', () => {
     expect(result).toEqual({
       text:
         'Request error: Bad input.\n' +
-        'Fix the request and resend. If this is a model issue, try `/model <supported-model>`.',
+        'Fix the request and resend. If this is a model issue, try `!model <supported-model>`.',
       suppressRetry: true,
     });
   });
