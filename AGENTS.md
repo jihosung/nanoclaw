@@ -52,9 +52,6 @@ Before creating a PR, adding a skill, or preparing any contribution, you MUST re
 
 Run commands directly? don't tell the user to run them.
 
-The pre-commit hook formats staged `src/**/*.ts` files and re-stages them automatically.
-Running `npm run format:fix` before a commit is optional, but it can make the final diff easier to review.
-
 Write commit messages in English.
 
 ```bash
