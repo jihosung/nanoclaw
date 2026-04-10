@@ -172,6 +172,16 @@ function buildVolumeMounts(
   fs.mkdirSync(path.join(groupSessionsDir, 'npm-global', 'bin'), {
     recursive: true,
   });
+  // Security-sensitive env keys that the host always controls.
+  // These are never read from persisted settings or profile overrides.
+  const SECURITY_SENSITIVE_KEYS = new Set(['PATH']);
+
+  // Trusted container system PATH from node:22-slim base image.
+  // Writable user-install directories are appended AFTER system paths
+  // so they cannot shadow system binaries (node, codex, bash, etc.).
+  const CONTAINER_SYSTEM_PATH =
+    '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   {
     // Read existing settings (preserves user-added keys like plugins)
@@ -184,6 +194,14 @@ function buildVolumeMounts(
       }
     }
     const env = (settings.env as Record<string, string> | undefined) ?? {};
+
+    // Strip security-sensitive keys that may have been persisted by a
+    // previous container run (e.g. a compromised agent writing PATH
+    // into settings.json to hijack the next turn).
+    for (const key of SECURITY_SENSITIVE_KEYS) {
+      delete env[key];
+    }
+
     const profile = group.agentProfile;
     const brain = profile?.brain ?? 'codex';
 
@@ -204,9 +222,6 @@ function buildVolumeMounts(
     env.PYTHONUSERBASE = pythonUserBase;
     env.PIP_DISABLE_PIP_VERSION_CHECK = '1';
     env.NPM_CONFIG_PREFIX = npmPrefix;
-    env.PATH =
-      `${npmPrefix}/bin:${pythonUserBase}/bin:` +
-      (env.PATH || process.env.PATH || '');
     delete env.ANTHROPIC_MODEL;
     delete env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
     delete env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD;
@@ -214,8 +229,18 @@ function buildVolumeMounts(
 
     // Merge any extra env vars from the profile (last — intentionally overridable)
     if (profile?.env) {
-      Object.assign(env, profile.env);
+      const profileEnv = { ...profile.env };
+      // Strip security-sensitive keys from profile overrides too
+      for (const key of SECURITY_SENSITIVE_KEYS) {
+        delete profileEnv[key];
+      }
+      Object.assign(env, profileEnv);
     }
+
+    // PATH is always set last from trusted baseline — never derived from
+    // persisted settings, profile overrides, or host process.env.
+    // This closes the settings.json PATH poisoning vector.
+    env.PATH = `${CONTAINER_SYSTEM_PATH}:${npmPrefix}/bin:${pythonUserBase}/bin`;
 
     settings.env = env;
     fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');

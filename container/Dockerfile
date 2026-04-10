@@ -38,6 +38,19 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 # Install agent-browser, claude-code, and codex CLI globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code @openai/codex
 
+# Pin absolute paths for security-critical binaries.
+# NanoClaw code uses these symlinks instead of bare names to prevent
+# PATH hijacking by writable user-install directories inside the container.
+# Build fails immediately if either binary is missing.
+RUN CODEX_REAL="$(command -v codex)" && \
+    NODE_REAL="$(command -v node)" && \
+    test -x "$CODEX_REAL" && \
+    test -x "$NODE_REAL" && \
+    ln -sf "$CODEX_REAL" /usr/local/bin/nanoclaw-codex && \
+    ln -sf "$NODE_REAL" /usr/local/bin/nanoclaw-node
+ENV NANOCLAW_CODEX_BIN=/usr/local/bin/nanoclaw-codex
+ENV NANOCLAW_NODE_BIN=/usr/local/bin/nanoclaw-node
+
 # Create app directory
 WORKDIR /app
 

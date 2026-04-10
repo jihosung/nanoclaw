@@ -105,9 +105,11 @@ export class CodexAppServerClient {
   async start(): Promise<void> {
     if (this.proc) return;
 
-    // @openai/codex is installed globally in the container image (npm install -g).
-    // Spawn the `codex` binary from PATH rather than resolving via require(),
-    // which only searches local node_modules and would fail here.
+    // Security: use pinned absolute paths from Dockerfile symlink contract.
+    // Prevents PATH hijacking via writable npm-global/bin or python-userbase/bin.
+    const codexBin = this.env.NANOCLAW_CODEX_BIN || '/usr/local/bin/nanoclaw-codex';
+    const nodeBin = this.env.NANOCLAW_NODE_BIN || '/usr/local/bin/nanoclaw-node';
+
     const mcpArgs = ['/tmp/dist/ipc-mcp-stdio.js'];
     if (this.env.NANOCLAW_CHAT_JID) {
       mcpArgs.push('--chat-jid', this.env.NANOCLAW_CHAT_JID);
@@ -120,10 +122,10 @@ export class CodexAppServerClient {
     }
 
     this.proc = spawn(
-      'codex',
+      codexBin,
       [
         '-c',
-        'mcp_servers.nanoclaw.command="node"',
+        `mcp_servers.nanoclaw.command="${nodeBin}"`,
         '-c',
         `mcp_servers.nanoclaw.args=${JSON.stringify(mcpArgs)}`,
         'app-server',
