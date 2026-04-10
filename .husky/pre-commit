@@ -1,1 +1,12 @@
-npm run format:fix
+#!/usr/bin/env sh
+
+set -e
+
+staged_files=$(git diff --cached --name-only --diff-filter=ACMR | grep '^src/.*\.ts$' || true)
+
+if [ -z "$staged_files" ]; then
+  exit 0
+fi
+
+printf '%s\n' "$staged_files" | xargs npx prettier --write
+printf '%s\n' "$staged_files" | xargs git add --
