@@ -111,6 +111,12 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+export function normalizeTrigger(trigger: string): string {
+  const trimmed = trigger.trim();
+  if (!trimmed) return '';
+  return trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
+}
+
 export function buildTriggerPattern(trigger: string): RegExp {
   return new RegExp(`^${escapeRegex(trigger.trim())}\\b`, 'i');
 }

@@ -7,7 +7,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { STORE_DIR } from '../src/config.ts';
+import { STORE_DIR, normalizeTrigger } from '../src/config.ts';
 import { initDatabase, setRegisteredGroup } from '../src/db.ts';
 import { isValidGroupFolder } from '../src/group-folder.ts';
 import { logger } from '../src/logger.ts';
@@ -71,8 +71,9 @@ function parseArgs(args: string[]): RegisterArgs {
 export async function run(args: string[]): Promise<void> {
   const projectRoot = process.cwd();
   const parsed = parseArgs(args);
+  const normalizedTrigger = normalizeTrigger(parsed.trigger);
 
-  if (!parsed.jid || !parsed.name || !parsed.trigger || !parsed.folder) {
+  if (!parsed.jid || !parsed.name || !normalizedTrigger || !parsed.folder) {
     emitStatus('REGISTER_CHANNEL', {
       STATUS: 'failed',
       ERROR: 'missing_required_args',
@@ -103,7 +104,7 @@ export async function run(args: string[]): Promise<void> {
   setRegisteredGroup(parsed.jid, {
     name: parsed.name,
     folder: parsed.folder,
-    trigger: parsed.trigger,
+    trigger: normalizedTrigger,
     added_at: new Date().toISOString(),
     requiresTrigger: parsed.requiresTrigger,
     isMain: parsed.isMain,
@@ -233,7 +234,7 @@ export async function run(args: string[]): Promise<void> {
     NAME: parsed.name,
     FOLDER: parsed.folder,
     CHANNEL: parsed.channel,
-    TRIGGER: parsed.trigger,
+    TRIGGER: normalizedTrigger,
     REQUIRES_TRIGGER: parsed.requiresTrigger,
     ASSISTANT_NAME: parsed.assistantName,
     NAME_UPDATED: nameUpdated,

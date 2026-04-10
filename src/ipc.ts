@@ -3,7 +3,12 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  DATA_DIR,
+  IPC_POLL_INTERVAL,
+  TIMEZONE,
+  normalizeTrigger,
+} from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder, resolveGroupFolderPath } from './group-folder.js';
@@ -513,10 +518,18 @@ export async function processTaskIpc(
         break;
       }
       if (data.jid && data.name && data.folder && data.trigger) {
+        const normalizedTrigger = normalizeTrigger(data.trigger);
         if (!isValidGroupFolder(data.folder)) {
           logger.warn(
             { sourceGroup, folder: data.folder },
             'Invalid register_group request - unsafe folder name',
+          );
+          break;
+        }
+        if (!normalizedTrigger) {
+          logger.warn(
+            { sourceGroup, trigger: data.trigger },
+            'Invalid register_group request - empty trigger',
           );
           break;
         }
@@ -536,7 +549,7 @@ export async function processTaskIpc(
         deps.registerGroup(data.jid, {
           name: data.name,
           folder: data.folder,
-          trigger: data.trigger,
+          trigger: normalizedTrigger,
           added_at: new Date().toISOString(),
           containerConfig: data.containerConfig,
           requiresTrigger: data.requiresTrigger,

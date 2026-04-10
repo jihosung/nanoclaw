@@ -704,6 +704,25 @@ describe('register_group success', () => {
     expect(group!.trigger).toBe('@Andy');
   });
 
+  it('adds @ prefix when register_group trigger is stored without it', async () => {
+    await processTaskIpc(
+      {
+        type: 'register_group',
+        jid: 'plain@g.us',
+        name: 'Plain Trigger Group',
+        folder: 'plain-trigger-group',
+        trigger: 'codex',
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    const group = getRegisteredGroup('plain@g.us');
+    expect(group).toBeDefined();
+    expect(group!.trigger).toBe('@codex');
+  });
+
   it('register_group rejects request with missing fields', async () => {
     await processTaskIpc(
       {
