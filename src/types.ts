@@ -46,6 +46,7 @@ export type BrainType = 'codex';
 export interface AgentProfile {
   brain: BrainType;
   model?: string; // Override global AGENT_MODEL / default model
+  effort?: string; // Override global CODEX_EFFORT / default reasoning effort
   env?: Record<string, string>; // Extra env vars injected into the container
 }
 

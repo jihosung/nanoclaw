@@ -36,6 +36,21 @@ export interface CodexAppServerTurnResult {
   result: string | null;
 }
 
+export interface AppServerReasoningEffortOption {
+  reasoningEffort: string;
+  description?: string;
+}
+
+export interface AppServerModelInfo {
+  id: string;
+  model?: string;
+  displayName?: string;
+  isDefault?: boolean;
+  hidden?: boolean;
+  defaultReasoningEffort?: string;
+  supportedReasoningEfforts?: AppServerReasoningEffortOption[];
+}
+
 interface JsonRpcResponse {
   id: number;
   result?: unknown;
@@ -268,9 +283,9 @@ export class CodexAppServerClient {
     };
   }
 
-  async listModels(): Promise<{ id: string; displayName?: string; isDefault?: boolean }[]> {
+  async listModels(): Promise<AppServerModelInfo[]> {
     const result = await this.request('model/list', { limit: 50, includeHidden: false });
-    return ((result as { data?: { id: string; displayName?: string; isDefault?: boolean }[] }).data) ?? [];
+    return ((result as { data?: AppServerModelInfo[] }).data) ?? [];
   }
 
   async readConfig(): Promise<Record<string, unknown>> {

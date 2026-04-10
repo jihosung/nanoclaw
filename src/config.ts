@@ -15,6 +15,7 @@ const envConfig = readEnvFile([
   'TRANSLATOR_MODEL',
   'AGENT_MODEL',
   'OPENAI_MODEL',
+  'CODEX_EFFORT',
   'OPENAI_API_KEY',
   'CONTAINER_TIMEOUT',
   'IDLE_TIMEOUT',
@@ -78,6 +79,8 @@ export const AGENT_MODEL =
   process.env.AGENT_MODEL || envConfig.AGENT_MODEL || '';
 export const OPENAI_MODEL =
   process.env.OPENAI_MODEL || envConfig.OPENAI_MODEL || '';
+export const CODEX_EFFORT =
+  process.env.CODEX_EFFORT || envConfig.CODEX_EFFORT || '';
 export const OPENAI_API_KEY =
   process.env.OPENAI_API_KEY || envConfig.OPENAI_API_KEY || '';
 export const NANOCLAW_RESTART_CMD =

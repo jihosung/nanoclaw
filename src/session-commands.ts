@@ -1,7 +1,12 @@
 import { OPENAI_MODEL } from './config.js';
 import { readCodexAccountUsage } from './codex-account.js';
 import {
+  createPendingEffortSelection,
+  formatCodexEffortStatus,
   formatCodexModelStatus,
+  getPendingEffortSelection,
+  getSupportedEffortOptions,
+  resolvePendingEffortSelection,
   updateCodexRuntimeState,
 } from './codex-runtime-state.js';
 import { deleteSession, setRegisteredGroup } from './db.js';
@@ -15,11 +20,12 @@ export type SessionCommand =
   | { type: 'compact' }
   | { type: 'restart' }
   | { type: 'model'; model: string }
+  | { type: 'effort'; effort: string }
   | { type: 'usage' }
   | { type: 'help' };
 
 const COMMAND_RE =
-  /^\/(clear|stop|compact|restart|model|usage|help)(?:\s+(.+))?$/i;
+  /^\/(clear|stop|compact|restart|model|effort|usage|help)(?:\s+(.+))?$/i;
 
 /**
  * Scan messages (latest first) for a session command.
@@ -39,9 +45,30 @@ export function extractCommand(messages: NewMessage[]): SessionCommand | null {
     if (cmd === 'compact') return { type: 'compact' };
     if (cmd === 'restart') return { type: 'restart' };
     if (cmd === 'model') return { type: 'model', model: arg };
+    if (cmd === 'effort') return { type: 'effort', effort: arg };
     if (cmd === 'usage') return { type: 'usage' };
     if (cmd === 'help') return { type: 'help' };
   }
+  return null;
+}
+
+export function extractPendingEffortSelection(
+  messages: NewMessage[],
+  chatJid: string,
+): SessionCommand | null {
+  if (!getPendingEffortSelection(chatJid)) return null;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.is_bot_message) continue;
+    const trimmed = msg.content.trim();
+    if (!/^\d+$/.test(trimmed)) continue;
+
+    const option = resolvePendingEffortSelection(chatJid, trimmed);
+    if (!option) return null;
+    return { type: 'effort', effort: option.value };
+  }
+
   return null;
 }
 
@@ -79,6 +106,34 @@ export async function handleSessionCommand(
   lastAgentTimestamp[chatJid] = lastMessage.timestamp;
   saveState();
 
+  const effectiveModel = group.agentProfile?.model || OPENAI_MODEL || 'gpt-5.4';
+
+  const sendEffortPrompt = async (
+    modelId = effectiveModel,
+    intro?: string,
+  ): Promise<void> => {
+    const pending = createPendingEffortSelection(chatJid, modelId);
+    if (!pending) {
+      updateCodexRuntimeState(chatJid, {
+        pendingEffortSelection: undefined,
+      });
+      const fallbackLines = [
+        intro || `Model set to \`${modelId}\`.`,
+        formatCodexEffortStatus(chatJid, modelId, modelId),
+      ];
+      await channel.sendMessage(chatJid, fallbackLines.join('\n\n'));
+      return;
+    }
+
+    updateCodexRuntimeState(chatJid, {
+      pendingEffortSelection: pending,
+    });
+    const lines = [intro, formatCodexEffortStatus(chatJid, modelId, modelId)].filter(
+      Boolean,
+    );
+    await channel.sendMessage(chatJid, lines.join('\n\n'));
+  };
+
   switch (command.type) {
     case 'clear': {
       const killed = queue.killProcess(chatJid);
@@ -87,6 +142,9 @@ export async function handleSessionCommand(
       }
       deleteSession(group.folder);
       delete sessions[group.folder];
+      updateCodexRuntimeState(chatJid, {
+        pendingEffortSelection: undefined,
+      });
       logger.info(
         { group: group.name, killedActiveProcess: killed },
         'Session cleared via /clear command',
@@ -138,10 +196,9 @@ export async function handleSessionCommand(
 
     case 'model': {
       if (!command.model) {
-        const fallback = OPENAI_MODEL || 'gpt-5.4';
         await channel.sendMessage(
           chatJid,
-          formatCodexModelStatus(chatJid, fallback),
+          formatCodexModelStatus(chatJid, effectiveModel),
         );
         break;
       }
@@ -150,18 +207,80 @@ export async function handleSessionCommand(
         brain: 'codex',
         ...group.agentProfile,
         model: command.model,
+        effort: undefined,
       };
       setRegisteredGroup(chatJid, group);
       updateCodexRuntimeState(chatJid, {
         requestedModel: command.model,
+        requestedEffort: undefined,
+        pendingEffortSelection: undefined,
       });
       logger.info(
         { group: group.name, model: command.model },
         'Model updated via /model command',
       );
+      await sendEffortPrompt(
+        command.model,
+        `Model set to \`${command.model}\`. Choose the effort for the next message.`,
+      );
+      break;
+    }
+
+    case 'effort': {
+      if (!command.effort) {
+        await sendEffortPrompt();
+        break;
+      }
+
+      const pending = getPendingEffortSelection(chatJid);
+      const options =
+        pending?.model === effectiveModel
+          ? pending.options
+          : getSupportedEffortOptions(chatJid, effectiveModel);
+
+      let selectedEffort = command.effort;
+      if (/^\d+$/.test(command.effort)) {
+        const numericSelection = Number.parseInt(command.effort, 10);
+        const option = options[numericSelection - 1];
+        if (!option) {
+          await sendEffortPrompt(
+            effectiveModel,
+            `\`${command.effort}\` is not a valid effort selection for \`${effectiveModel}\`.`,
+          );
+          break;
+        }
+        selectedEffort = option.value;
+      }
+
+      if (
+        options.length > 0 &&
+        !options.some((option) => option.value === selectedEffort)
+      ) {
+        await sendEffortPrompt(
+          effectiveModel,
+          `\`${selectedEffort}\` is not supported by \`${effectiveModel}\`.`,
+        );
+        break;
+      }
+
+      group.agentProfile = {
+        brain: 'codex',
+        ...group.agentProfile,
+        model: effectiveModel,
+        effort: selectedEffort,
+      };
+      setRegisteredGroup(chatJid, group);
+      updateCodexRuntimeState(chatJid, {
+        requestedEffort: selectedEffort,
+        pendingEffortSelection: undefined,
+      });
+      logger.info(
+        { group: group.name, model: effectiveModel, effort: selectedEffort },
+        'Effort updated via /effort command',
+      );
       await channel.sendMessage(
         chatJid,
-        `Model set to \`${command.model}\`. Applies from next message.`,
+        `Effort set to \`${selectedEffort}\` for \`${effectiveModel}\`. Applies from next message.`,
       );
       break;
     }
@@ -190,8 +309,10 @@ export async function handleSessionCommand(
         '- `/stop`: Stop the active agent response',
         '- `/compact`: Compact the active session context',
         '- `/restart`: Restart the NanoClaw host process (main channel only)',
-        '- `/model`: Show the current model and available models',
-        '- `/model [model name]`: Change the model for the next message',
+        '- `/model`: Show the current model, effort, and available models',
+        '- `/model [model name]`: Change the model and open effort selection',
+        '- `/effort`: Show the current model effort options',
+        '- `/effort [effort]`: Change the reasoning effort for the next message',
         '- `/usage`: Show Codex account usage and reset times',
       ];
 

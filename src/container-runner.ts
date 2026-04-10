@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 
 import {
+  CODEX_EFFORT,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
@@ -190,7 +191,13 @@ function buildVolumeMounts(
     env.BRAIN_TYPE = brain;
 
     const model = profile?.model || OPENAI_MODEL || 'gpt-5.4';
+    const effort = profile?.effort || CODEX_EFFORT || '';
     env.OPENAI_MODEL = model;
+    if (effort) {
+      env.CODEX_EFFORT = effort;
+    } else {
+      delete env.CODEX_EFFORT;
+    }
     env.NANOCLAW_CHAT_JID = input.chatJid;
     env.NANOCLAW_GROUP_FOLDER = group.folder;
     env.NANOCLAW_IS_MAIN = input.isMain ? '1' : '0';
@@ -403,6 +410,7 @@ export async function runContainerAgent(
       containerName,
       brain: group.agentProfile?.brain ?? 'codex',
       model: group.agentProfile?.model || OPENAI_MODEL || 'gpt-5.4',
+      effort: group.agentProfile?.effort || CODEX_EFFORT || 'default',
       mountCount: mounts.length,
       isMain: input.isMain,
     },
@@ -501,6 +509,9 @@ export async function runContainerAgent(
         const availableMatch = line.match(
           /\[agent-runner\] Codex available models:\s*(.+)/,
         );
+        const modelCatalogMatch = line.match(
+          /\[agent-runner\] Codex model catalog:\s*(.+)/,
+        );
         if (configReadMatch) {
           try {
             const parsed = JSON.parse(configReadMatch[1].trim());
@@ -527,6 +538,18 @@ export async function runContainerAgent(
             { group: group.name, models: availableMatch[1].trim() },
             'Codex available models',
           );
+        } else if (modelCatalogMatch) {
+          try {
+            updateCodexRuntimeState(input.chatJid, {
+              modelCatalog: JSON.parse(modelCatalogMatch[1].trim()),
+            });
+            logger.debug({ group: group.name }, 'Codex model catalog updated');
+          } catch {
+            logger.warn(
+              { group: group.name, raw: modelCatalogMatch[1].trim() },
+              'Failed to parse Codex model catalog',
+            );
+          }
         } else if (modelMatch) {
           updateCodexRuntimeState(input.chatJid, {
             requestedModel: modelMatch[1].trim(),

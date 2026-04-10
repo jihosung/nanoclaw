@@ -6,7 +6,28 @@ import { getRouterState, setRouterState } from './db.js';
 
 export interface CodexRuntimeState {
   requestedModel?: string;
+  requestedEffort?: string;
   availableModels?: string;
+  modelCatalog?: CodexModelCatalogEntry[];
+  pendingEffortSelection?: PendingEffortSelection;
+}
+
+export interface CodexReasoningEffortOption {
+  value: string;
+  description?: string;
+}
+
+export interface CodexModelCatalogEntry {
+  id: string;
+  displayName?: string;
+  isDefault?: boolean;
+  defaultReasoningEffort?: string;
+  supportedReasoningEfforts?: CodexReasoningEffortOption[];
+}
+
+export interface PendingEffortSelection {
+  model: string;
+  options: CodexReasoningEffortOption[];
 }
 
 interface CodexModelsCache {
@@ -45,17 +66,52 @@ export function formatCodexModelStatus(
   chatJid: string,
   effectiveModel: string,
 ): string {
-  const current = `\`${getPreferredCodexModel(chatJid, effectiveModel)}\``;
+  const currentModel = getPreferredCodexModel(chatJid, effectiveModel);
+  const current = `\`${currentModel}\``;
 
   const lines = ['Model', `- Current: ${current}`];
+  const effort = getPreferredCodexEffort(chatJid, effectiveModel);
+  if (effort) {
+    lines.push(`- Effort: \`${effort}\``);
+  }
 
   const availableModels = getPreferredAvailableModels(chatJid);
   if (availableModels) {
     lines.push(`- Available: ${availableModels}`);
   }
 
-  lines.push(`- Change: \`/model [model name]\``);
+  lines.push(`- Change model: \`/model [model name]\``);
+  lines.push(`- Change effort: \`/effort\``);
   lines.push(`- Example: \`${getExampleCodexModelCommand(chatJid)}\``);
+
+  return lines.join('\n');
+}
+
+export function formatCodexEffortStatus(
+  chatJid: string,
+  effectiveModel: string,
+  targetModel = getPreferredCodexModel(chatJid, effectiveModel),
+): string {
+  const currentEffort = getPreferredCodexEffort(chatJid, targetModel);
+  const options = getSupportedEffortOptions(chatJid, targetModel);
+  const lines = ['Effort', `- Model: \`${targetModel}\``];
+
+  if (currentEffort) {
+    lines.push(`- Current: \`${currentEffort}\``);
+  }
+
+  if (options.length === 0) {
+    lines.push(
+      '- Options unavailable. Start a Codex run first so NanoClaw can fetch model metadata.',
+    );
+    return lines.join('\n');
+  }
+
+  lines.push('- Reply with one number to choose:');
+  for (const [index, option] of options.entries()) {
+    const description = option.description ? ` - ${option.description}` : '';
+    lines.push(`- ${index + 1} = \`${option.value}\`${description}`);
+  }
 
   return lines.join('\n');
 }
@@ -86,6 +142,17 @@ export function getPreferredCodexModel(
   return state.requestedModel || effectiveModel;
 }
 
+export function getPreferredCodexEffort(
+  chatJid: string,
+  effectiveModel: string,
+): string | undefined {
+  const state = getCodexRuntimeState(chatJid);
+  if (state.requestedEffort) return state.requestedEffort;
+
+  const currentModel = getPreferredCodexModel(chatJid, effectiveModel);
+  return getModelCatalogEntry(chatJid, currentModel)?.defaultReasoningEffort;
+}
+
 export function getPreferredAvailableModels(
   chatJid: string,
 ): string | undefined {
@@ -101,4 +168,53 @@ export function getExampleCodexModelCommand(chatJid: string): string {
     .find(Boolean);
 
   return `/model ${firstModel || 'gpt-5.4'}`;
+}
+
+export function getModelCatalog(chatJid: string): CodexModelCatalogEntry[] {
+  return getCodexRuntimeState(chatJid).modelCatalog || [];
+}
+
+export function getModelCatalogEntry(
+  chatJid: string,
+  modelId: string,
+): CodexModelCatalogEntry | undefined {
+  return getModelCatalog(chatJid).find((entry) => entry.id === modelId);
+}
+
+export function getSupportedEffortOptions(
+  chatJid: string,
+  modelId: string,
+): CodexReasoningEffortOption[] {
+  return getModelCatalogEntry(chatJid, modelId)?.supportedReasoningEfforts || [];
+}
+
+export function getPendingEffortSelection(
+  chatJid: string,
+): PendingEffortSelection | undefined {
+  return getCodexRuntimeState(chatJid).pendingEffortSelection;
+}
+
+export function createPendingEffortSelection(
+  chatJid: string,
+  modelId: string,
+): PendingEffortSelection | undefined {
+  const options = getSupportedEffortOptions(chatJid, modelId);
+  if (options.length === 0) return undefined;
+
+  return {
+    model: modelId,
+    options,
+  };
+}
+
+export function resolvePendingEffortSelection(
+  chatJid: string,
+  content: string,
+): CodexReasoningEffortOption | undefined {
+  const pending = getPendingEffortSelection(chatJid);
+  if (!pending) return undefined;
+
+  const selection = Number.parseInt(content.trim(), 10);
+  if (!Number.isFinite(selection) || selection < 1) return undefined;
+  return pending.options[selection - 1];
 }

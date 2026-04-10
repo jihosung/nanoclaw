@@ -10,6 +10,7 @@ import path from 'path';
 import {
   CodexAppServerClient,
   type AppServerInputItem,
+  type AppServerModelInfo,
 } from './codex-app-server-client.js';
 
 interface ContainerInput {
@@ -34,6 +35,17 @@ interface ContainerOutput {
 interface ScriptResult {
   wakeAgent: boolean;
   data?: unknown;
+}
+
+interface RuntimeModelCatalogEntry {
+  id: string;
+  displayName?: string;
+  isDefault?: boolean;
+  defaultReasoningEffort?: string;
+  supportedReasoningEfforts?: Array<{
+    value: string;
+    description?: string;
+  }>;
 }
 
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -64,6 +76,23 @@ function writeOutput(output: ContainerOutput): void {
 
 function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
+}
+
+function toRuntimeModelCatalog(
+  models: AppServerModelInfo[],
+): RuntimeModelCatalogEntry[] {
+  return models.map((model) => ({
+    id: model.model || model.id,
+    displayName: model.displayName,
+    isDefault: model.isDefault,
+    defaultReasoningEffort: model.defaultReasoningEffort,
+    supportedReasoningEfforts: (model.supportedReasoningEfforts || []).map(
+      (option) => ({
+        value: option.reasoningEffort,
+        description: option.description,
+      }),
+    ),
+  }));
 }
 
 function shouldClose(): boolean {
@@ -302,10 +331,12 @@ async function runCodexBrain(containerInput: ContainerInput): Promise<void> {
   try {
     try {
       const models = await client.listModels();
+      const catalog = toRuntimeModelCatalog(models);
       const modelNames = models
-        .map((model) => `${model.id}${model.isDefault ? ' (default)' : ''}`)
+        .map((model) => `${model.model || model.id}${model.isDefault ? ' (default)' : ''}`)
         .join(', ');
       log(`Codex available models: ${modelNames}`);
+      log(`Codex model catalog: ${JSON.stringify(catalog)}`);
     } catch (err) {
       log(`model/list failed: ${err instanceof Error ? err.message : String(err)}`);
     }
