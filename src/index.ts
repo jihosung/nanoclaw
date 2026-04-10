@@ -91,10 +91,22 @@ import {
 export { escapeXml, formatMessages } from './router.js';
 
 const LOG_PREVIEW_LEN = 120;
+const TYPING_HEARTBEAT_MS = 10000;
+const FOLLOW_UP_STALL_MS = 45000;
+const FOLLOW_UP_FORCE_KILL_MS = 10000;
+const FOLLOW_UP_RECOVERY_NOTICE = '세션을 다시 연결해서 이어서 처리하고 있어.';
+
 function preview(text: string): string {
   return text.length > LOG_PREVIEW_LEN
     ? text.slice(0, LOG_PREVIEW_LEN) + '...'
     : text;
+}
+
+interface FollowUpStallState {
+  recoveryCursor: string;
+  recoveryRequested: boolean;
+  timer: ReturnType<typeof setTimeout> | null;
+  forceKillTimer: ReturnType<typeof setTimeout> | null;
 }
 
 let lastTimestamp = '';
@@ -105,8 +117,99 @@ let messageLoopRunning = false;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+const typingHeartbeatIntervals = new Map<
+  string,
+  ReturnType<typeof setInterval>
+>();
+const followUpStalls = new Map<string, FollowUpStallState>();
 
 const onecli = new OneCLI({ url: ONECLI_URL });
+
+function setTypingState(
+  channel: Channel,
+  chatJid: string,
+  isTyping: boolean,
+): void {
+  channel
+    .setTyping?.(chatJid, isTyping)
+    ?.catch((err) =>
+      logger.warn(
+        { chatJid, err, isTyping },
+        'Failed to update typing indicator',
+      ),
+    );
+}
+
+function startTypingHeartbeat(channel: Channel, chatJid: string): void {
+  if (!channel.setTyping) return;
+  if (typingHeartbeatIntervals.has(chatJid)) return;
+  setTypingState(channel, chatJid, true);
+  const interval = setInterval(() => {
+    setTypingState(channel, chatJid, true);
+  }, TYPING_HEARTBEAT_MS);
+  typingHeartbeatIntervals.set(chatJid, interval);
+}
+
+function touchTypingHeartbeat(channel: Channel, chatJid: string): void {
+  if (!channel.setTyping) return;
+  if (!typingHeartbeatIntervals.has(chatJid)) {
+    startTypingHeartbeat(channel, chatJid);
+    return;
+  }
+  setTypingState(channel, chatJid, true);
+}
+
+function stopTypingHeartbeat(channel: Channel, chatJid: string): void {
+  const interval = typingHeartbeatIntervals.get(chatJid);
+  if (interval) {
+    clearInterval(interval);
+    typingHeartbeatIntervals.delete(chatJid);
+  }
+  setTypingState(channel, chatJid, false);
+}
+
+function clearFollowUpStall(chatJid: string): FollowUpStallState | undefined {
+  const state = followUpStalls.get(chatJid);
+  if (!state) return undefined;
+  if (state.timer) clearTimeout(state.timer);
+  if (state.forceKillTimer) clearTimeout(state.forceKillTimer);
+  followUpStalls.delete(chatJid);
+  return state;
+}
+
+function scheduleFollowUpStall(
+  channel: Channel,
+  chatJid: string,
+  recoveryCursor: string,
+): void {
+  const existing = clearFollowUpStall(chatJid);
+  const state: FollowUpStallState = {
+    recoveryCursor: existing?.recoveryCursor || recoveryCursor,
+    recoveryRequested: false,
+    timer: null,
+    forceKillTimer: null,
+  };
+
+  state.timer = setTimeout(() => {
+    const current = followUpStalls.get(chatJid);
+    if (!current) return;
+    current.recoveryRequested = true;
+    logger.warn({ chatJid }, 'Follow-up stalled, requesting session recovery');
+    stopTypingHeartbeat(channel, chatJid);
+    queue.closeStdin(chatJid);
+    current.forceKillTimer = setTimeout(() => {
+      if (queue.isActive(chatJid)) {
+        logger.warn(
+          { chatJid },
+          'Force-killing stalled container for recovery',
+        );
+        queue.killProcess(chatJid);
+      }
+    }, FOLLOW_UP_FORCE_KILL_MS);
+  }, FOLLOW_UP_STALL_MS);
+
+  followUpStalls.set(chatJid, state);
+}
 
 async function gracefulRestartHost(): Promise<void> {
   await queue.shutdown(10000);
@@ -364,85 +467,137 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
-  await channel.setTyping?.(chatJid, true);
-  let hadError = false;
-  let outputSentToUser = false;
-  let suppressRetry = false;
+  let promptToRun = prompt;
+  let isRecoveryRun = false;
+  let shouldRetry = false;
+  let recoveryCursorForRetry: string | null = null;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback ??called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks ??agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info(
-        { group: group.name, output: preview(text) },
-        `Agent output: ${raw.length} chars`,
-      );
-      if (text) {
-        const outText =
-          TRANSLATOR_ENABLED && TRANSLATOR_URL
-            ? await translateToKorean(text, TRANSLATOR_URL, TRANSLATOR_MODEL)
-            : text;
-        const outboundText =
-          result.phase === 'final'
-            ? formatFinalResultOutbound(chatJid, outText)
-            : formatOutbound(outText);
-        if (outboundText) {
-          await channel.sendMessage(chatJid, outboundText);
+  do {
+    shouldRetry = false;
+    startTypingHeartbeat(channel, chatJid);
+    let hadError = false;
+    let outputSentToUser = false;
+    let suppressRetry = false;
+
+    const output = await runAgent(
+      group,
+      promptToRun,
+      chatJid,
+      async (result) => {
+        touchTypingHeartbeat(channel, chatJid);
+        if (followUpStalls.has(chatJid)) {
+          clearFollowUpStall(chatJid);
         }
-        outputSentToUser = true;
-      }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success') {
-      if (result.result === null) {
-        await channel.setTyping?.(chatJid, false);
-      }
-      queue.notifyIdle(chatJid);
-    }
+        // Streaming output callback ??called for each agent result
+        if (result.result) {
+          const raw =
+            typeof result.result === 'string'
+              ? result.result
+              : JSON.stringify(result.result);
+          // Strip <internal>...</internal> blocks ??agent uses these for internal reasoning
+          const text = raw
+            .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+            .trim();
+          logger.info(
+            { group: group.name, output: preview(text) },
+            `Agent output: ${raw.length} chars`,
+          );
+          if (text) {
+            const outText =
+              TRANSLATOR_ENABLED && TRANSLATOR_URL
+                ? await translateToKorean(
+                    text,
+                    TRANSLATOR_URL,
+                    TRANSLATOR_MODEL,
+                  )
+                : text;
+            const outboundText =
+              result.phase === 'final'
+                ? formatFinalResultOutbound(chatJid, outText)
+                : formatOutbound(outText);
+            if (outboundText) {
+              await channel.sendMessage(chatJid, outboundText);
+            }
+            outputSentToUser = true;
+          }
+          // Only reset idle timer on actual results, not session-update markers (result: null)
+          resetIdleTimer();
+        }
 
-    if (result.status === 'error' && result.error) {
-      await channel.setTyping?.(chatJid, false);
-      const userFacingError = toUserFacingAgentError(result.error);
-      if (userFacingError) {
-        await channel.sendMessage(chatJid, userFacingError.text);
-        outputSentToUser = true;
-        suppressRetry = userFacingError.suppressRetry;
-      }
-    }
+        if (result.status === 'success') {
+          if (result.result === null) {
+            stopTypingHeartbeat(channel, chatJid);
+          }
+          queue.notifyIdle(chatJid);
+        }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
+        if (result.status === 'error' && result.error) {
+          stopTypingHeartbeat(channel, chatJid);
+          const userFacingError = toUserFacingAgentError(result.error);
+          if (userFacingError) {
+            await channel.sendMessage(chatJid, userFacingError.text);
+            outputSentToUser = true;
+            suppressRetry = userFacingError.suppressRetry;
+          }
+        }
 
-  await channel.setTyping?.(chatJid, false);
-  if (idleTimer) clearTimeout(idleTimer);
-
-  if (output === 'error' || hadError) {
-    // If we already sent output to the user, don't roll back the cursor ??    // the user got their response and re-processing would send duplicates.
-    if (outputSentToUser) {
-      logger.warn(
-        { group: group.name, suppressRetry },
-        'Agent error after user-visible output, skipping cursor rollback',
-      );
-      return true;
-    }
-    // Roll back cursor so retries can re-process these messages
-    lastAgentTimestamp[chatJid] = previousCursor;
-    saveState();
-    logger.warn(
-      { group: group.name },
-      'Agent error, rolled back message cursor for retry',
+        if (result.status === 'error') {
+          hadError = true;
+        }
+      },
     );
-    return false;
-  }
+
+    stopTypingHeartbeat(channel, chatJid);
+
+    const followUpStall = clearFollowUpStall(chatJid);
+    if (!isRecoveryRun && followUpStall?.recoveryRequested) {
+      const recoveryMessages = getMessagesSince(
+        chatJid,
+        followUpStall.recoveryCursor,
+        ASSISTANT_NAME,
+        MAX_MESSAGES_PER_PROMPT,
+      );
+      if (recoveryMessages.length > 0) {
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+          idleTimer = null;
+        }
+        recoveryCursorForRetry = followUpStall.recoveryCursor;
+        await channel.sendMessage(chatJid, FOLLOW_UP_RECOVERY_NOTICE);
+        promptToRun = formatMessages(recoveryMessages, TIMEZONE);
+        shouldRetry = true;
+        isRecoveryRun = true;
+        continue;
+      }
+    }
+
+    if (output === 'error' || hadError) {
+      // If we already sent output to the user, don't roll back the cursor ??    // the user got their response and re-processing would send duplicates.
+      if (outputSentToUser) {
+        logger.warn(
+          { group: group.name, suppressRetry, isRecoveryRun },
+          'Agent error after user-visible output, skipping cursor rollback',
+        );
+        return true;
+      }
+      const rollbackCursor =
+        isRecoveryRun && recoveryCursorForRetry !== null
+          ? recoveryCursorForRetry
+          : previousCursor;
+      // Roll back cursor so retries can re-process these messages
+      lastAgentTimestamp[chatJid] = rollbackCursor;
+      saveState();
+      logger.warn(
+        { group: group.name, isRecoveryRun },
+        'Agent error, rolled back message cursor for retry',
+      );
+      return false;
+    }
+  } while (shouldRetry);
+
+  if (idleTimer) clearTimeout(idleTimer);
+  clearFollowUpStall(chatJid);
 
   return true;
 }
@@ -637,9 +792,10 @@ async function startMessageLoop(): Promise<void> {
 
           // Pull all messages since lastAgentTimestamp so non-trigger
           // context that accumulated between triggers is included.
+          const recoveryCursor = getOrRecoverCursor(chatJid);
           const allPending = getMessagesSince(
             chatJid,
-            getOrRecoverCursor(chatJid),
+            recoveryCursor,
             ASSISTANT_NAME,
             MAX_MESSAGES_PER_PROMPT,
           );
@@ -659,12 +815,8 @@ async function startMessageLoop(): Promise<void> {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
-            // Show typing indicator while the container processes the piped message
-            channel
-              .setTyping?.(chatJid, true)
-              ?.catch((err) =>
-                logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
-              );
+            startTypingHeartbeat(channel, chatJid);
+            scheduleFollowUpStall(channel, chatJid, recoveryCursor);
           } else {
             // No active container ??enqueue for a new one
             queue.enqueueMessageCheck(chatJid);

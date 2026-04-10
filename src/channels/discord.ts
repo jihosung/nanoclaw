@@ -32,6 +32,8 @@ export interface DiscordChannelOpts {
 
 export class DiscordChannel implements Channel {
   name = 'discord';
+  private static readonly TYPING_REFRESH_MS = 8000;
+  private static readonly TYPING_STALE_MS = 25000;
 
   private client: Client | null = null;
   private opts: DiscordChannelOpts;
@@ -39,6 +41,7 @@ export class DiscordChannel implements Channel {
   private typingIntervals: Map<string, ReturnType<typeof setInterval>> =
     new Map();
   private typingVersion: Map<string, number> = new Map();
+  private typingTouchedAt: Map<string, number> = new Map();
 
   constructor(botToken: string, opts: DiscordChannelOpts) {
     this.botToken = botToken;
@@ -327,15 +330,11 @@ export class DiscordChannel implements Channel {
     if (!this.client) return;
 
     if (!isTyping) {
-      const existing = this.typingIntervals.get(jid);
-      if (existing !== undefined) {
-        clearInterval(existing);
-        this.typingIntervals.delete(jid);
-      }
-      // Bump version to cancel any in-flight sendTyping() calls
-      this.typingVersion.set(jid, (this.typingVersion.get(jid) ?? 0) + 1);
+      this.stopTypingLoop(jid, true);
       return;
     }
+
+    this.typingTouchedAt.set(jid, Date.now());
 
     // Already typing for this jid
     if (this.typingIntervals.has(jid)) return;
@@ -345,6 +344,11 @@ export class DiscordChannel implements Channel {
     const sendTyping = async () => {
       // Bail out if setTyping(false) was called since we started
       if ((this.typingVersion.get(jid) ?? 0) !== version) return;
+      const lastTouched = this.typingTouchedAt.get(jid) ?? 0;
+      if (Date.now() - lastTouched > DiscordChannel.TYPING_STALE_MS) {
+        this.stopTypingLoop(jid, true);
+        return;
+      }
       try {
         const channelId = jid.replace(/^dc:/, '');
         const channel = await this.client!.channels.fetch(channelId);
@@ -367,8 +371,20 @@ export class DiscordChannel implements Channel {
 
     if (!this.typingIntervals.has(jid)) return;
 
-    const interval = setInterval(sendTyping, 8000);
+    const interval = setInterval(sendTyping, DiscordChannel.TYPING_REFRESH_MS);
     this.typingIntervals.set(jid, interval);
+  }
+
+  private stopTypingLoop(jid: string, bumpVersion: boolean): void {
+    const existing = this.typingIntervals.get(jid);
+    if (existing !== undefined) {
+      clearInterval(existing);
+      this.typingIntervals.delete(jid);
+    }
+    this.typingTouchedAt.delete(jid);
+    if (bumpVersion) {
+      this.typingVersion.set(jid, (this.typingVersion.get(jid) ?? 0) + 1);
+    }
   }
 
   private resolveAttachments(

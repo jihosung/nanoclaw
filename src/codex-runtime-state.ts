@@ -185,7 +185,9 @@ export function getSupportedEffortOptions(
   chatJid: string,
   modelId: string,
 ): CodexReasoningEffortOption[] {
-  return getModelCatalogEntry(chatJid, modelId)?.supportedReasoningEfforts || [];
+  return (
+    getModelCatalogEntry(chatJid, modelId)?.supportedReasoningEfforts || []
+  );
 }
 
 export function getPendingEffortSelection(

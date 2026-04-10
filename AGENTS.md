@@ -50,7 +50,9 @@ Before creating a PR, adding a skill, or preparing any contribution, you MUST re
 
 ## Development
 
-Run commands directly?”don't tell the user to run them.
+Run commands directly? don't tell the user to run them.
+
+Before creating a commit, run `npm run format:fix` so formatting changes are included in the same commit instead of being left behind by hooks.
 
 ```bash
 npm run dev          # Run with hot reload

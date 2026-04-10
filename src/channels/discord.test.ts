@@ -517,7 +517,14 @@ describe('DiscordChannel', () => {
       await channel.connect();
 
       const attachments = new Map([
-        ['att1', { name: 'photo.png', contentType: 'image/png' }],
+        [
+          'att1',
+          {
+            name: 'photo.png',
+            contentType: 'image/png',
+            url: 'https://example.com/photo.png',
+          },
+        ],
       ]);
       const msg = createMessage({
         content: '',
@@ -529,7 +536,7 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: '[Image: photo.png]',
+          content: '[Image: photo.png](https://example.com/photo.png)',
         }),
       );
     });
@@ -540,7 +547,14 @@ describe('DiscordChannel', () => {
       await channel.connect();
 
       const attachments = new Map([
-        ['att1', { name: 'clip.mp4', contentType: 'video/mp4' }],
+        [
+          'att1',
+          {
+            name: 'clip.mp4',
+            contentType: 'video/mp4',
+            url: 'https://example.com/clip.mp4',
+          },
+        ],
       ]);
       const msg = createMessage({
         content: '',
@@ -552,7 +566,7 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: '[Video: clip.mp4]',
+          content: '[Video: clip.mp4](https://example.com/clip.mp4)',
         }),
       );
     });
@@ -563,7 +577,14 @@ describe('DiscordChannel', () => {
       await channel.connect();
 
       const attachments = new Map([
-        ['att1', { name: 'report.pdf', contentType: 'application/pdf' }],
+        [
+          'att1',
+          {
+            name: 'report.pdf',
+            contentType: 'application/pdf',
+            url: 'https://example.com/report.pdf',
+          },
+        ],
       ]);
       const msg = createMessage({
         content: '',
@@ -575,7 +596,7 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: '[File: report.pdf]',
+          content: '[File: report.pdf](https://example.com/report.pdf)',
         }),
       );
     });
@@ -586,7 +607,14 @@ describe('DiscordChannel', () => {
       await channel.connect();
 
       const attachments = new Map([
-        ['att1', { name: 'photo.jpg', contentType: 'image/jpeg' }],
+        [
+          'att1',
+          {
+            name: 'photo.jpg',
+            contentType: 'image/jpeg',
+            url: 'https://example.com/photo.jpg',
+          },
+        ],
       ]);
       const msg = createMessage({
         content: 'Check this out',
@@ -598,7 +626,7 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: 'Check this out\n[Image: photo.jpg]',
+          content: 'Check this out\n[Image: photo.jpg](https://example.com/photo.jpg)',
         }),
       );
     });
@@ -609,8 +637,22 @@ describe('DiscordChannel', () => {
       await channel.connect();
 
       const attachments = new Map([
-        ['att1', { name: 'a.png', contentType: 'image/png' }],
-        ['att2', { name: 'b.txt', contentType: 'text/plain' }],
+        [
+          'att1',
+          {
+            name: 'a.png',
+            contentType: 'image/png',
+            url: 'https://example.com/a.png',
+          },
+        ],
+        [
+          'att2',
+          {
+            name: 'b.txt',
+            contentType: 'text/plain',
+            url: 'https://example.com/b.txt',
+          },
+        ],
       ]);
       const msg = createMessage({
         content: '',
@@ -622,7 +664,8 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: '[Image: a.png]\n[File: b.txt]',
+          content:
+            '[Image: a.png](https://example.com/a.png)\n[File: b.txt](https://example.com/b.txt)',
         }),
       );
     });
@@ -771,7 +814,9 @@ describe('DiscordChannel', () => {
         attachments: [{ path: '../secret.txt' }],
       });
 
-      expect(mockChannel.send).toHaveBeenCalledWith('No file');
+      expect(mockChannel.send).toHaveBeenCalledWith(
+        'No file\n\nFailed to send attachment(s): no valid files were found in the current group workspace.',
+      );
     });
 
     it('sends attachment-only messages', async () => {
@@ -835,6 +880,14 @@ describe('DiscordChannel', () => {
   // --- setTyping ---
 
   describe('setTyping', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it('sends typing indicator when isTyping is true', async () => {
       const opts = createTestOpts();
       const channel = new DiscordChannel('test-token', opts);
@@ -849,6 +902,44 @@ describe('DiscordChannel', () => {
       await channel.setTyping('dc:1234567890123456', true);
 
       expect(mockChannel.sendTyping).toHaveBeenCalled();
+    });
+
+    it('refreshes an existing typing loop without creating a duplicate interval', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      const mockChannel = {
+        send: vi.fn(),
+        sendTyping: vi.fn().mockResolvedValue(undefined),
+      };
+      currentClient().channels.fetch.mockResolvedValue(mockChannel);
+
+      await channel.setTyping('dc:1234567890123456', true);
+      await channel.setTyping('dc:1234567890123456', true);
+
+      await vi.advanceTimersByTimeAsync(16000);
+
+      expect(mockChannel.sendTyping).toHaveBeenCalledTimes(3);
+    });
+
+    it('auto-stops stale typing loops when no heartbeat refresh arrives', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      const mockChannel = {
+        send: vi.fn(),
+        sendTyping: vi.fn().mockResolvedValue(undefined),
+      };
+      currentClient().channels.fetch.mockResolvedValue(mockChannel);
+
+      await channel.setTyping('dc:1234567890123456', true);
+      await vi.advanceTimersByTimeAsync(24000);
+      expect(mockChannel.sendTyping).toHaveBeenCalledTimes(4);
+
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(mockChannel.sendTyping).toHaveBeenCalledTimes(4);
     });
 
     it('does nothing when isTyping is false', async () => {

@@ -128,9 +128,10 @@ export async function handleSessionCommand(
     updateCodexRuntimeState(chatJid, {
       pendingEffortSelection: pending,
     });
-    const lines = [intro, formatCodexEffortStatus(chatJid, modelId, modelId)].filter(
-      Boolean,
-    );
+    const lines = [
+      intro,
+      formatCodexEffortStatus(chatJid, modelId, modelId),
+    ].filter(Boolean);
     await channel.sendMessage(chatJid, lines.join('\n\n'));
   };
 
