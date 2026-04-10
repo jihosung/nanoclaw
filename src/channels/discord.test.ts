@@ -626,7 +626,8 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: 'Check this out\n[Image: photo.jpg](https://example.com/photo.jpg)',
+          content:
+            'Check this out\n[Image: photo.jpg](https://example.com/photo.jpg)',
         }),
       );
     });
