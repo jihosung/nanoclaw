@@ -30,6 +30,7 @@ groups/global/*
 
 # Temp files
 .tmp-*
+TODO.md
 
 # OS
 .DS_Store
